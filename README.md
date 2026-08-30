@@ -212,7 +212,110 @@ live2d.dispose()                 # 释放
 
 ---
 
-## 五、Live2DViewer 桌面查看器
+## 五、参数控制原理
+
+### 5.1 核心原理
+
+Live2D 的"动"本质是一条数据流，全程无机器学习：
+
+```
+每帧给参数赋值 → model.Update() 驱动参数/物理/动作 → model.Draw() 画网格 → 换帧
+```
+
+`model.SetParameterValue(param_id, value)` 可对**任意参数**赋值，一帧内可同时改几十个参数。Viewer 里拖动滑轨只是"人肉逐帧设参"，用代码就是把这个动作写进循环——一次写好，60+ FPS 稳定驱动，这正是"预设动作场景"的基础。
+
+```python
+while running:
+    for k, v in scene_params.items():
+        model.SetParameterValue(k, v)
+    model.Update()
+    model.Draw()
+```
+
+### 5.2 两种动画实现方式
+
+**方式一：程序化（靠时间/正弦函数现场算）** — 适合眨眼、说话、呼吸这类循环：
+
+```python
+"ParamEyeLOpen": 1.0 if (f // 30) % 4 != 2 else 0.05,   # 眨眼
+"ParamMouthOpenY": 0.5 + 0.5 * math.sin(t * 6),          # 说话
+```
+
+**方式二：关键帧列表（预设场景，逐帧遍历+插值）** — 适合编排完整动作剧情：
+
+```python
+keyframes = [{"ParamMouthOpenY": 0.0, "ParamAngleZ": 0},
+             {"ParamMouthOpenY": 0.7, "ParamAngleZ": -8},
+             {"ParamMouthOpenY": 0.0, "ParamAngleZ": 0}]
+# 相邻两帧线性插值，逐帧应用
+```
+
+（`param_control.py anim` 已内置线性插值的关键帧引擎。）
+
+### 5.3 参数信息从哪里来
+
+一个模型的参数信息由两部分构成：
+
+| 信息 | 来源文件 | 怎么读 |
+|---|---|---|
+| 参数 id、范围 min/max、默认值 | `*.moc3`（二进制） | 运行时枚举：`GetParameterCount()` + `GetParameter(i)`（返回 `.id/.min/.max/.default/.value`） |
+| 参数的显示名（"去外套"等） | `*.cdi3.json`（DisplayInfo） | `json.load(...)` 后取 `Parameters` 列表的 `Id`→`Name` 映射 |
+
+关联结构（在 `*.model3.json` 里声明）：
+
+```json
+{
+  "Moc": "llny.moc3",
+  "Textures": ["llny.4096/texture_00.png", "..."],
+  "DisplayInfo": "llny.cdi3.json"
+}
+```
+
+> `model3.json` 里的 `Groups` 还标注了标准用途，如 `EyeBlink` → `["ParamEyeLOpen","ParamEyeROpen"]`。
+
+### 5.4 可复用 API `model_api.py`
+
+把参数获取封装成可直接 import 的接口（**隐藏窗口**加载模型，无需弹窗）：
+
+```python
+from model_api import ModelSession, parameter_table
+
+with ModelSession("/path/to/llny.model3.json") as m:
+    params = m.parameters()        # 遍历全部 Parameter(id/name/min/max/default/value)
+    pmap = m.parameter_map()       # {参数id: Parameter}
+    m.set("Param14", 1.0)          # 去水印（自动 clamp 到 [min,max]）
+    m.set("Param2", 0.6)           # 脱外套 60%
+    v = m.read("ParamMouthOpenY")  # 读当前值
+
+# 一次性拿全量参数表（窗口内部自动创建/销毁）
+table = parameter_table("/path/to/llny.model3.json")
+for p in table:
+    print(p.id, p.name, f"[{p.min}, {p.max}]", "default=", p.default)
+```
+
+命令行直接导出：`python model_api.py --model <model3.json> --out params.txt`
+
+### 5.5 现成工具 `param_control.py`
+
+| 命令 | 作用 |
+|---|---|
+| `python param_control.py list` | 枚举模型全部参数（id/名称/min/max/default），自动读取同目录 `.cdi3.json` 配名字 |
+| `python param_control.py set --param Param14=1 Param2=0.6 --out x.png` | 设参数截一帧 |
+| `python param_control.py anim --frames 180` | 关键帧动画演示（去水印+眨眼+说话+摇头+脱外套） |
+
+### 5.6 llny 模型参数速查
+
+**表情/服饰开关（0~1，一个参数控制一个效果）**：`Param`比心、`Param2`去外套、`Param3`眼镜、`Param4`口罩、`Param5`荷包蛋、`Param6`阿尼亚、`Param7`黑脸、`Param8`舌头、`Param9`星星、`Param11`生气、`Param12`哭、`Param13`脸红、`Param14`去掉水印（设1）。
+
+**姿态五官（Cubism 标准）**：`ParamAngleX/Y/Z`(-30~30)、`ParamBodyAngleX/Y/Z`(-10~10)、`ParamEyeLOpen/R`(0~1)、`ParamMouthOpenY`(0~1)、`ParamMouthForm`(-1~1)、`ParamBreath`(0~1)、`ParamHairFront/Side/Back`(-1~1)。
+
+**细节部件旋转（-45~45）**：`Param_Angle_Rotation_N_ArtMeshXXX`，对应丸子头/后发/袜子结/草莓结/外套结等单个部件。
+
+完整清单见同目录 `llny_params.txt`。
+
+---
+
+## 六、Live2DViewer 桌面查看器
 
 仓库自带的独立 **Qt6 桌面应用**（源码在 `Live2DViewer/`，C++17），一个 Live2D 模型查看器，与 Python 库无关，无需 Python 依赖。
 
@@ -252,7 +355,7 @@ cd Live2DViewer && ./Live2DViewer.exe
 
 ---
 
-## 六、验证结果（示例环境：conda + Python 3.10.16）
+## 七、验证结果（示例环境：conda + Python 3.10.16）
 
 实测通过：
 
@@ -265,7 +368,7 @@ cd Live2DViewer && ./Live2DViewer.exe
 
 ---
 
-## 七、常见问题与注意点
+## 八、常见问题与注意点
 
 1. **`model.Draw()` 前必须开混合**：`GL.glEnable(GL.GL_BLEND)`，否则边缘出现黑边。
 2. **必须先建 GL 上下文再 `live2d.init()`**：顺序反了会崩。
