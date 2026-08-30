@@ -246,9 +246,13 @@ class LayeredWindow:
             self._drag = (wx, wy, x, y)
         elif button == glfw.MOUSE_BUTTON_LEFT and action == glfw.RELEASE:
             self._drag = None
-            self._tug_anchor = None          # release: pet returns to normal pose
-            self.tug_zone = "body"
-            self.tug_target = (0.0, 0.0)
+            self._tug_anchor = None          # release: pet glides back to the
+            self.tug_target = (0.0, 0.0)     # normal pose. Leave tug_zone frozen
+                                             # (set at press) so the decaying tug
+                                             # retraces the SAME params; resetting
+                                             # it here made the remaining pull hit
+                                             # the other zone's params mid-decay
+                                             # and the pose snapped to front.
 
     def _maybe_double_or_single(self, key, x, y, on_double, on_single):
         """Handle a click that is either the first half of a double-click or a
@@ -538,6 +542,9 @@ HEAD_TUG_AMP = 20.0               # head looks up/down with the drag (ParamAngle
 BODY_TURN_AMP = 15.0              # head leads the body turn toward the drag (ParamAngleX)
 BODY_LEAN_AMP = 5.0               # torso leans along the turn (ParamBodyAngleZ, - = toward drag)
 BODY_TUG_AMP = 5.0                # body leans fwd/back with a vertical drag (ParamBodyAngleX)
+TUG_ATTACK_RATE = 0.15            # follow the mouse pull while held (per-frame)
+TUG_RELEASE_RATE = 0.07           # glide back to (0,0) on release: slower, so the
+                                  # pose eases home instead of snapping
 
 
 def _add_param_delta(model, pid, delta):
@@ -1024,11 +1031,12 @@ def main():
                 clothes_level += (target - clothes_level) * 0.06
                 clothes_value = clothes_level
 
-            # locked-drag tug: ease the pose toward the mouse pull while held,
-            # decay back to (0,0) as soon as the button is released
+            # locked-drag tug: follow the mouse pull while held, then glide back
+            # to (0,0) on release — attack fast, decay slow so it eases home
             t, tt = win.tug, win.tug_target
-            win.tug = (t[0] + (tt[0] - t[0]) * 0.15,
-                       t[1] + (tt[1] - t[1]) * 0.15)
+            rate = (TUG_ATTACK_RATE if tt != (0.0, 0.0) else TUG_RELEASE_RATE)
+            win.tug = (t[0] + (tt[0] - t[0]) * rate,
+                       t[1] + (tt[1] - t[1]) * rate)
 
             if express:
                 express_frame(win, model, f, control, idle_motion, estate,
