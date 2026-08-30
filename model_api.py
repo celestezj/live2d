@@ -81,9 +81,13 @@ class ModelSession:
     """A loaded model inside a (hidden by default) GL context.
 
     Use as a context manager; close() tears down the GL window and live2d.
+    By default the SDK's auto blink/breath are disabled so that set() takes
+    effect immediately; pass auto=True to keep them (the model then blinks and
+    breathes on its own, overriding ParamEyeLOpen/R and ParamBreath).
     """
 
-    def __init__(self, model_json, width=800, height=600, visible=False):
+    def __init__(self, model_json, width=800, height=600, visible=False,
+                 auto=False):
         glfw.init()
         if not visible:
             glfw.window_hint(glfw.VISIBLE, glfw.FALSE)   # headless-ish inspection
@@ -95,6 +99,11 @@ class ModelSession:
         live2d.glInit()
         self.model = live2d.LAppModel()
         self.model.LoadModelJson(os.path.abspath(model_json))
+        if not auto:
+            # C++ SDK drives its own blink/breath each Update(); disable so that
+            # SetParameterValue() keeps full control of the parameters.
+            self.model.SetAutoBlinkEnable(False)
+            self.model.SetAutoBreathEnable(False)
         self.model.Resize(width, height)
         self.width, self.height = width, height
         self._names = load_cdi_names(model_json)

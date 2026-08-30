@@ -232,6 +232,13 @@ while running:
     model.Draw()
 ```
 
+> **⚠️ 自动眨眼/呼吸会覆盖你的参数。** C++ SDK（`_v3cpp.pyd`）默认在每次 `model.Update()` 内部驱动自己的自动眨眼与呼吸，把 `ParamEyeLOpen`/`ParamEyeROpen`/`ParamBreath` 覆盖回它算的值——导致"眼睛不听代码指挥、只眨了一次"。程序控制前先关掉它们：
+> ```python
+> model.SetAutoBlinkEnable(False)
+> model.SetAutoBreathEnable(False)
+> ```
+> `model_api.ModelSession` 默认已关闭（可传 `auto=True` 保留）；`param_control.py` 内部也已关闭。
+
 ### 5.2 两种动画实现方式
 
 **方式一：程序化（靠时间/正弦函数现场算）** — 适合眨眼、说话、呼吸这类循环：

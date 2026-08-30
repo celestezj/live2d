@@ -65,6 +65,11 @@ class _GLFW:
         live2d.glInit()
         self.model = live2d.LAppModel()
         self.model.LoadModelJson(os.path.abspath(model_json))
+        # The C++ SDK drives its own auto-blink/breath on every Update(), which
+        # would overwrite ParamEyeLOpen/R and ParamBreath. Disable them so that
+        # SetParameterValue() keeps full control of the parameters.
+        self.model.SetAutoBlinkEnable(False)
+        self.model.SetAutoBreathEnable(False)
         self.model.Resize(width, height)
         self.width, self.height = width, height
 
@@ -141,8 +146,8 @@ def cmd_anim(model_json, frames, out_dir):
                     "ParamMouthOpenY", "ParamAngleZ", "ParamAngleX", "ParamAngleY"):
             print(f"  {p.id:<24} {names.get(p.id,''):<16} [{p.min}, {p.max}]")
 
-    # static: remove watermark (llny) if the param exists
-    static = ensure_params(m, ["Param14"])
+    # static: params kept at a fixed value for the whole run (llny only)
+    static = ensure_params(m, ["Param14", "Param2"])
     if "Param14" in static:
         m.SetParameterValue("Param14", 1.0)
         print("Param14(去掉水印) -> 1")
