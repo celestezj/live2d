@@ -44,6 +44,7 @@ import ctypes
 import json
 import math
 import os
+import random
 import socketserver
 import sys
 import threading
@@ -565,15 +566,20 @@ def new_emotion_state(model, emotion):
     return {"keys": keys,
             "valid": valid,
             "blend": {k: pose.get(k, 0.0) for k in keys},
-            "mouth_cur": pose.get("ParamMouthOpenY", 0.0)}
+            "mouth_cur": pose.get("ParamMouthOpenY", 0.0),
+            # random body actions (only when main() turns random_actions on)
+            "gesture": None,          # current action or None
+            "gesture_at": 0.0,        # glfw time when the next action may start
+            "random_actions": False}
 
 
 # Tug amplitudes (deg). Yaw/pitch ranges: head ±30, body ±10. llny's angle rig
 # is unlabelled: AX is the yaw axis, AY the pitch axis (probed and confirmed
-# against live drags and the model's own PRPRLive mapping). It also has NO torso
-# yaw — ParamBodyAngleY is a vertical stretch (hgt 705 vs 678 at ±10) and
-# ParamBodyAngleZ leans the upper body while the hips counter-swing. So a body
-# tug is faked as the head leading the turn plus a slight lean along it.
+# against live drags and the model's own PRPRLive mapping). ParamBodyAngleX is
+# the torso turn (chest sweeps, feet anchored — same sign as AX, the body
+# follows the head), ParamBodyAngleY is a vertical stretch/squash (hgt 705 vs
+# 678 at ±10), ParamBodyAngleZ sways hips with the chest counter-swinging. So a
+# body tug drives head + torso turn together, and the vertical tug crouches.
 SINGLE_CLICK_DELAY = 0.5          # wait this long (>= the 0.5s double-click
                                   # window) before a lone right-click locks
 HEAD_ZONE = 0.40                  # canvas fraction: grab point below this (in the
@@ -695,6 +701,81 @@ def _apply_tug(model, valid, tug, zone="body"):
             _add_param_delta(model, "ParamBodyAngleY", ty * BODY_TUG_AMP)
 
 
+# --- random body actions (express mode, only with --random-actions) ---------
+ACTIVE_ACTION_EMOTIONS = ("兴奋", "开心", "惊喜")   # lively emotions get actions
+# seconds between actions (TIME-based, not frame-based: the loop's actual fps is
+# unpredictable with layered windows + audio capture, so frame counts would make
+# the gap stretch out on slow machines — glfw.get_time() keeps the rhythm steady)
+GESTURE_IDLE_MIN_S, GESTURE_IDLE_MAX_S = 1.5, 4.5  # between actions
+GESTURE_FIRST_MIN_S, GESTURE_FIRST_MAX_S = 1.0, 2.5  # before the very first one
+TUG_SETTLE_EPS = 0.05              # a pull this small (~<0.5°) counts as settled:
+                                   # win.tug decays asymptotically toward (0,0) and
+                                   # never reaches exact zero, so gating on `any`
+                                   # would block gestures forever after a drag
+# each action: (frames, [(curve, param, amp, cycles)]), curve = swing | pulse.
+# swing = amp*sin(2π*cycles*t) (full round-trips), pulse = amp*sin(π*t) (one
+# bump); both are 0 at t=0 and t=1, so the pose always returns home. Amps are
+# on the model's own ranges (head/body ±30/±10, arms ±30).
+GESTURES = {
+    "sway":   (80, [("swing", "ParamBodyAngleZ", 5.0, 1),
+                    ("swing", "ParamAngleZ", 3.0, 1)]),
+    "twist":  (90, [("swing", "ParamBodyAngleX", 7.0, 2)]),
+    "hop":    (45, [("pulse", "ParamBodyAngleY", -6.0, 1),
+                    ("pulse", "ParamAngleY", -4.0, 1)]),
+    "waveL":  (75, [("swing", "Param41", -16.0, 2),    # left arm swings out
+                    ("swing", "ParamAngleZ", 4.0, 2)]),
+    "waveR":  (75, [("swing", "Param43", 16.0, 2),     # right arm swings out
+                    ("swing", "ParamAngleZ", -4.0, 2)]),
+    "arms":   (60, [("swing", "Param41", -12.0, 1),    # both arms out and back
+                    ("swing", "Param43", 12.0, 1)]),
+    "shake":  (60, [("swing", "ParamAngleX", 8.0, 3)]),
+}
+
+
+def _random_gesture_frame(model, state, emotion, valid, tug):
+    """One step of the random body actions. Only runs when main() turned
+    state["random_actions"] on (the --random-actions flag); otherwise this is a
+    no-op and the express look is exactly the original. Active only for the
+    lively emotions and while the locked-drag tug is idle. After a random
+    1.5-4.5 s wait picks a gesture at random (with a random amplitude), plays it
+    by ADDING the curve values on top of the pose/sway, then idles again — the
+    curves all return to 0, so the pet eases back to its normal pose."""
+    if not state.get("random_actions"):
+        return
+    g = state.get("gesture")
+    if g is None:
+        if emotion not in ACTIVE_ACTION_EMOTIONS:
+            return
+        if tug is not None and (abs(tug[0]) > TUG_SETTLE_EPS or
+                                abs(tug[1]) > TUG_SETTLE_EPS):
+            # actively pulled, or still easing back from a pull: wait a fresh
+            # full interval so we don't interrupt. Gate on MAGNITUDE, not `any`:
+            # the release decay is asymptotic, so a residual 1e-9 would otherwise
+            # count as "dragging" and block actions forever.
+            state["gesture_at"] = glfw.get_time() + random.uniform(
+                GESTURE_IDLE_MIN_S, GESTURE_IDLE_MAX_S)   # fresh full interval
+            return
+        if glfw.get_time() < state["gesture_at"]:
+            return
+        gid = random.choice(list(GESTURES))
+        dur, _ = GESTURES[gid]
+        state["gesture"] = {"id": gid, "f": 0, "dur": dur,
+                            "amp": random.uniform(0.7, 1.3)}
+        state["gesture_at"] = glfw.get_time() + random.uniform(
+            GESTURE_IDLE_MIN_S, GESTURE_IDLE_MAX_S)
+        return
+    gf = g["f"]; t = gf / g["dur"]
+    for curve, pid, amp, cycles in GESTURES[g["id"]][1]:
+        if pid not in valid:
+            continue
+        v = (amp * math.sin(2 * math.pi * cycles * t) if curve == "swing"
+             else amp * math.sin(math.pi * t))
+        model.AddParameterValue(pid, v * g["amp"])
+    g["f"] = gf + 1
+    if g["f"] >= g["dur"]:
+        state["gesture"] = None
+
+
 def express_frame(win, model, f, control, idle_motion, state, clothes=None,
                   tug=None, tug_zone="body"):
     """One frame of express mode: an emotion pose (cross-faded over ~15 frames)
@@ -742,6 +823,10 @@ def express_frame(win, model, f, control, idle_motion, state, clothes=None,
         if pid in valid:
             model.SetParameterValue(
                 pid, blend.get(pid, 0.0) + amp * math.sin(f * rate + phase))
+
+    # optional random body actions (--random-actions): lively emotions
+    # occasionally sway / twist / hop / wave to break the idle monotony
+    _random_gesture_frame(model, state, emotion, valid, tug)
 
     # mouth: while talking the audio energy drives the opening (open fast,
     # close slow); otherwise rest at the pose's own mouth opening
@@ -975,6 +1060,11 @@ def main():
     ap.add_argument("--self-test", action="store_true",
                     help="render one transparent frame, print alpha stats, save "
                          "pet_preview.png, then exit")
+    ap.add_argument("--random-actions", action="store_true",
+                    help="express mode only: lively emotions (兴奋/开心/惊喜) "
+                         "occasionally make a random body action — body sway, "
+                         "twist, hop, wave an arm, arms out, head shake — to "
+                         "break the idle monotony (default off: original look)")
     args = ap.parse_args()
 
     glfw.init()
@@ -1019,6 +1109,15 @@ def main():
             emotion = "平和"
         control = PetControl(emotion)
         estate = new_emotion_state(model, emotion)
+        estate["random_actions"] = args.random_actions   # --random-actions flag
+        if args.random_actions:
+            # first action comes after only ~1-2.5 s (past the emotion's
+            # cross-fade) so you see it immediately; the steady rhythm between
+            # actions stays 1.5-4.5 s
+            estate["gesture_at"] = glfw.get_time() + random.uniform(
+                GESTURE_FIRST_MIN_S, GESTURE_FIRST_MAX_S)
+            print("random actions: on — 兴奋/开心/惊喜 will occasionally "
+                  "sway / twist / hop / wave an arm (1.5-4.5 s apart)")
 
         def _toggle_clothes():                      # right-double-click on the pet
             dressed = control.toggle_clothes()
