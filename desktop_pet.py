@@ -3,7 +3,8 @@ always-on-top window (Windows). Only the character is visible: the background is
 fully transparent (per-pixel alpha via a Win32 layered window), no window chrome.
 
 The character plays a looping demo animation (watermark off + blink + talk +
-head sway + coat on/off). Press ESC (or Alt+F4) to quit.
+head sway + coat on/off). Press ESC (or Alt+F4) to quit. Drag with the left
+mouse button (pressing on a visible pixel of the character) to move it around.
 
 Usage:
   python desktop_pet.py [--model /path/to/model.model3.json]
@@ -141,8 +142,45 @@ class LayeredWindow:
         self.size = SIZE(width, height)
         self.last_rgba = None                     # straight-alpha RGBA (bottom-up)
 
+        self._drag = None                         # (win_x, win_y, cursor_x, cursor_y)
+        glfw.set_mouse_button_callback(self.window, self._on_mouse_button)
+        glfw.set_cursor_pos_callback(self.window, self._on_cursor_pos)
+
         glfw.show_window(self.window)
         glfw.poll_events()
+
+    # ---- drag to move the window ----------------------------------------
+
+    def _hit_character(self, x, y):
+        """True if the cursor (content coords, y down) is over a visible pixel."""
+        alpha = self.last_rgba
+        if alpha is None or not (0 <= x < self.w and 0 <= y < self.h):
+            return False
+        # last_rgba is bottom-up: row 0 = bottom of the window
+        return alpha[self.h - 1 - int(y), int(x), 3] >= 16
+
+    def _on_mouse_button(self, window, button, action, mods):
+        if button != glfw.MOUSE_BUTTON_LEFT:
+            return
+        if action == glfw.PRESS:
+            if not self._hit_character(*glfw.get_cursor_pos(window)):
+                return                       # ignore clicks on transparent pixels
+            wx, wy = glfw.get_window_pos(window)
+            cx, cy = glfw.get_cursor_pos(window)
+            self._drag = (wx, wy, cx, cy)
+        elif action == glfw.RELEASE:
+            self._drag = None
+
+    def _on_cursor_pos(self, window, x, y):
+        if self._drag is None:
+            return
+        _, _, cx0, cy0 = self._drag              # grab offset inside the window
+        wx, wy = glfw.get_window_pos(window)     # CURRENT position, not the press one
+        # Target keeps the grabbed pixel under the cursor. Using the current
+        # window position (rather than the position at press time) breaks the
+        # feedback loop: moving the window under a stationary cursor changes the
+        # content coords, which previously pulled the window back and forth.
+        glfw.set_window_pos(window, round(wx + x - cx0), round(wy + y - cy0))
 
     def present(self):
         """Blit the just-rendered GL back buffer into the layered window."""
@@ -158,9 +196,12 @@ class LayeredWindow:
         out[:, :, 3] = al.astype(np.uint8)                                             # A
         ctypes.memmove(self.pixels, out.ctypes.data, out.nbytes)
 
+        # pptDst must be NULL: passing a point would move the window there every
+        # frame (dragging would snap back to that origin). None keeps the current
+        # window position.
         user32.UpdateLayeredWindow(
             self.hwnd, self.hdc_screen,
-            ctypes.byref(self.pt_dst), ctypes.byref(self.size),
+            None, ctypes.byref(self.size),
             self.hdc_mem, ctypes.byref(self.pt_src),
             0, ctypes.byref(self.blend), ULW_ALPHA)
 
