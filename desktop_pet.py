@@ -237,6 +237,22 @@ class LayeredWindow:
                 return
             if not self._hit_character(x, y):
                 return                       # ignore clicks on transparent pixels
+            now = glfw.get_time()
+            t0, p0 = self._last_click["L"]   # left double-click on the body
+            dbl = ((now - t0) < 0.5 and p0 is not None
+                   and abs(x - p0[0]) < 24 and abs(y - p0[1]) < 24)
+            self._last_click["L"] = ((0.0, None) if dbl else (now, (x, y)))
+            if dbl and y >= self.h * HEAD_ZONE:   # double-click below the head
+                self._drag = None                 # triggers the same shy +
+                self._tug_anchor = None           # legs-together as a thigh
+                self.tug_zone = "legs"            # drag, but instant — in
+                self.tug = SHY_IMPULSE            # practice it only fires on
+                self.tug_target = SHY_IMPULSE     # the legs (thighs and below;
+                                                  # chest/private don't), holds
+                                                  # while pressed, then eases
+                                                  # out on release (tug_zone
+                                                  # stays frozen in the decay)
+                return
             if self.locked:
                 self._tug_anchor = (x, y)    # locked: tug the pet in place
                 self.tug_zone = ("head" if y < self.h * HEAD_ZONE else
@@ -560,6 +576,12 @@ SHY_GAZE_SIDE = 0.25              # averted gaze (probed: ParamEyeBallX + = righ
 SHY_LID = 0.25                    # half-lidded bashful eyes (ParamEyeLOpen/R -)
 SHY_LOOKDOWN = 5.0                # head pitches down a touch (ParamAngleY -)
 SHY_MOUTH = 0.3                   # soft bashful smile (ParamMouthForm +)
+SHY_IMPULSE = (0.8, 0.6)          # left-double-click on the legs (thighs and
+                                  # below; in practice the chest/private area
+                                  # don't fire): a pull vector that ramps the
+                                  # legs-zone shy reaction to full (hypot = 1.0),
+                                  # holds while pressed, then eases out on
+                                  # release
 TUG_ATTACK_RATE = 0.15            # follow the mouse pull while held (per-frame)
 TUG_RELEASE_RATE = 0.07           # glide back to (0,0) on release: slower, so the
                                   # pose eases home instead of snapping
@@ -1037,7 +1059,9 @@ def main():
               "0 to reset; right-click to lock/unlock position, "
               "right-DOUBLE-click to take the jacket off/on; while locked, "
               "drag the head to turn/nod it, drag the body to turn it, drag "
-              "the legs to make her shy (thighs together) (Alt+F4 works too)")
+              "the legs to make her shy (thighs together); double-click her "
+              "legs (thighs and below) to make her shy instantly "
+              "(Alt+F4 works too)")
         f = 0
         prev_keys = {}
         clothes_level = 1.0               # animated jacket level (0 = off, 1 = on)
