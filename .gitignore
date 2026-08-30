@@ -1,6 +1,10 @@
 # Live2D 官方 SDK（许可限制、可重新下载，不纳入版本管理）
 CubismSdkForNative-5-r.5.zip
 
+# Live2DViewer 桌面应用（预编译包 + 解压目录）
+Live2DViewer-win64.zip
+Live2DViewer/
+
 # 渲染输出产物
 verify_v3.png
 *.png

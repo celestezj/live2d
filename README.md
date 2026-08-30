@@ -212,7 +212,47 @@ live2d.dispose()                 # 释放
 
 ---
 
-## 五、验证结果（示例环境：conda + Python 3.10.16）
+## 五、Live2DViewer 桌面查看器
+
+仓库自带的独立 **Qt6 桌面应用**（源码在 `Live2DViewer/`，C++17），一个 Live2D 模型查看器，与 Python 库无关，无需 Python 依赖。
+
+- 支持 **Cubism 3.0+**（`.model3.json`），不支持老 `.moc` 模型
+- 渲染引擎与 Python `live2d.v3` 是同一套 `Live2D::V3` SDK
+- 功能：多模型标签页、部件面板、网格面板、点击移动/缩放、中/英/日多语言
+
+### 使用（预编译版，推荐）
+
+1. 下载约 70MB 的预编译包并解压运行：
+
+```bash
+curl -L -o Live2DViewer-win64.zip \
+  https://github.com/EasyLive2D/live2d-py/releases/download/v0.7.0.4/Live2DViewer-win64.zip
+unzip Live2DViewer-win64.zip -d Live2DViewer
+cd Live2DViewer && ./Live2DViewer.exe
+```
+
+2. 点"打开模型"选择一个 `.model3.json`（例如 `/path/to/live2d-py/Resources/v3/Haru/Haru.model3.json`）；每个模型开一个标签页，可同时打开多个。
+
+3. 交互操作：
+
+| 操作 | 效果 |
+|---|---|
+| 点击画布后 ↑↓←→ | 移动模型 |
+| `-` / `=` 键 | 缩小 / 放大 |
+| 鼠标右键 | 唤出菜单，清空选中状态 |
+| 部件面板 / 网格面板点行 | 选中对应绘制区域 |
+
+界面语言自动跟随系统（`Live2DViewer/Translations/` 含 zh_CN / en / ja_JP）。
+
+### 从源码编译（不推荐）
+
+- 依赖 Qt 6.8/6.9 + CMake + Cubism SDK（v3 的 `Live2D/` submodule 与 Core）
+- ⚠️ `Live2DViewer/CMakeLists.txt` 首行硬编码了作者的 Linux Qt 路径，Windows 上需先改 `CMAKE_PREFIX_PATH`
+- 构建：`cmake --build build --config Release --target Live2DViewer`
+
+---
+
+## 六、验证结果（示例环境：conda + Python 3.10.16）
 
 实测通过：
 
@@ -225,7 +265,7 @@ live2d.dispose()                 # 释放
 
 ---
 
-## 六、常见问题与注意点
+## 七、常见问题与注意点
 
 1. **`model.Draw()` 前必须开混合**：`GL.glEnable(GL.GL_BLEND)`，否则边缘出现黑边。
 2. **必须先建 GL 上下文再 `live2d.init()`**：顺序反了会崩。
