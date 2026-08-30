@@ -252,6 +252,13 @@ python desktop_pet.py --self-test             # 只渲染一帧透明图并输�
   ```
   命令在一条连接里可连发多条；情绪切换同样约 0.25 秒平滑过渡。
 
+- **`mock_control.py`（控制端测试工具）**：一个交互式 TCP 客户端，连上 `--control-port` 端口后直接输入命令，不用写代码就能快速测试表情和嘴型：
+  ```bash
+  python desktop_pet.py --control-port 5000    # 终端 A：先起宠物
+  python mock_control.py --port 5000           # 终端 B：再开控制端
+  ```
+  进入后直接输入情绪名（`help` 看全部 16 种）、`mouth <0..1>` 强制开嘴、`mouth null` 释放嘴、`demo` 自动轮播几个情绪、`quit` 退出。与 AI 管线用的是**同一个协议**（每行一个 JSON），所以测通了这里 = 管线也能通。
+
 - **三者组合（推荐场景）**：`--emotion 兴奋 --lipsync /path/to/speech.wav --control-port 5000` 同时开启——宠物自播 wav 对口型，AI 管线经 TCP 随时切当前情绪。注意：**说话期间 TCP 的 `{"mouth":..}` 会被音频能量覆盖**（对口型拥有嘴），发 `{"mouth":null}` 才释放回待机。
 
 ---
