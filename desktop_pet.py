@@ -196,8 +196,11 @@ class LayeredWindow:
         self.last_rgba = None                     # straight-alpha RGBA (bottom-up)
 
         self._drag = None                         # (win_x, win_y, cursor_x, cursor_y)
-        self._last_rclick = (0.0, None)           # (glfw time, (x, y)) for right dbl-click
+        self._last_click = {"L": (0.0, None),     # (glfw time, (x, y)) per button
+                            "R": (0.0, None)}     #   for double-click detection
         self.clothes_cb = None                    # called on right-double-click (jacket)
+        self.lock_cb = None                       # called on left-double-click (position)
+        self.locked = False                       # left-double-click toggles: locked = no drag
         glfw.set_mouse_button_callback(self.window, self._on_mouse_button)
         glfw.set_cursor_pos_callback(self.window, self._on_cursor_pos)
 
@@ -215,35 +218,49 @@ class LayeredWindow:
         return alpha[self.h - 1 - int(y), int(x), 3] >= 16
 
     def _on_mouse_button(self, window, button, action, mods):
-        if button == glfw.MOUSE_BUTTON_RIGHT:
-            if action == glfw.PRESS:                 # right-double-click toggles clothes
-                self._maybe_double_click(*glfw.get_cursor_pos(window))
-            return
-        if button != glfw.MOUSE_BUTTON_LEFT:
-            return
         if action == glfw.PRESS:
-            if not self._hit_character(*glfw.get_cursor_pos(window)):
+            x, y = glfw.get_cursor_pos(window)
+            if button == glfw.MOUSE_BUTTON_RIGHT:
+                self._maybe_double_click("R", x, y, self._on_jacket_double_click)
+                return
+            if button != glfw.MOUSE_BUTTON_LEFT:
+                return
+            # left press on the character
+            if self._maybe_double_click("L", x, y, self._on_lock_double_click):
+                return                       # double-click consumed (lock toggled)
+            if not self._hit_character(x, y):
                 return                       # ignore clicks on transparent pixels
+            if self.locked:
+                return                       # position locked: dragging disabled
             wx, wy = glfw.get_window_pos(window)
-            cx, cy = glfw.get_cursor_pos(window)
-            self._drag = (wx, wy, cx, cy)
-        elif action == glfw.RELEASE:
+            self._drag = (wx, wy, x, y)
+        elif button == glfw.MOUSE_BUTTON_LEFT and action == glfw.RELEASE:
             self._drag = None
 
-    def _maybe_double_click(self, x, y):
-        """A second right-click on the character within ~0.5s (and near the
-        previous one) is a double-click -> toggle the clothes via clothes_cb."""
+    def _maybe_double_click(self, key, x, y, on_double):
+        """A second click on the character within ~0.5s (and <24px from the
+        previous one) is a double-click: fire on_double() once and return True.
+        Returns False for a first/single click (records it for the next one)."""
         if not self._hit_character(x, y):
-            return
+            return False
         now = glfw.get_time()
-        t0, p0 = self._last_rclick
+        t0, p0 = self._last_click[key]
         if (now - t0) < 0.5 and p0 is not None and \
                 abs(x - p0[0]) < 24 and abs(y - p0[1]) < 24:
-            self._last_rclick = (0.0, None)          # consumed the pair
-            if self.clothes_cb is not None:
-                self.clothes_cb()
-        else:
-            self._last_rclick = (now, (x, y))
+            self._last_click[key] = (0.0, None)      # consumed the pair
+            on_double()
+            return True
+        self._last_click[key] = (now, (x, y))
+        return False
+
+    def _on_jacket_double_click(self):
+        if self.clothes_cb is not None:
+            self.clothes_cb()
+
+    def _on_lock_double_click(self):
+        self.locked = not self.locked
+        if self.lock_cb is not None:
+            self.lock_cb(self.locked)
 
     def _on_cursor_pos(self, window, x, y):
         if self._drag is None:
@@ -786,6 +803,11 @@ def main():
             print("jacket: " + ("on" if dressed else "off"))
         win.clothes_cb = _toggle_clothes
 
+        def _on_lock(locked):                       # left-double-click on the pet
+            print("position: " + ("locked (drag disabled)" if locked
+                                  else "unlocked (drag to move)"))
+        win.lock_cb = _on_lock
+
         idle_motion = None
         if args.viewer or express:
             idle_motion = find_idle_motion(args.model)
@@ -848,8 +870,8 @@ def main():
             control_server = start_control_server(args.control_port, control)
 
         print("transparent pet running — press ESC to quit, +/- to resize, "
-              "0 to reset; right-DOUBLE-click the pet to take the jacket "
-              "off/on (Alt+F4 works too)")
+              "0 to reset; left-DOUBLE-click to lock/unlock position, "
+              "right-DOUBLE-click to take the jacket off/on (Alt+F4 works too)")
         f = 0
         prev_keys = {}
         clothes_level = 1.0               # animated jacket level (0 = off, 1 = on)
