@@ -529,7 +529,8 @@ class PetControl:
         self._lock = threading.Lock()
         self.emotion = emotion
         self.mouth = None                 # None = not talking, 0..1 = forced open
-        self.clothes = None               # None = auto (demo coat sway), False = off, True = on
+        self.clothes = True               # True = dressed, False = undressed
+                                          # (llny Param2 "去外套": 0 = wearing, 1 = removed)
 
     def set_emotion(self, name):
         if name not in EMOTIONS:
@@ -1036,14 +1037,14 @@ def main():
                 print("no idle motion found; blink/sway/physics only")
 
         if express:
-            express_frame(win, model, 0, control, idle_motion, estate, clothes=1.0,
+            express_frame(win, model, 0, control, idle_motion, estate, clothes=0.0,
                           tug=(0.0, 0.0))
         elif args.viewer:
-            viewer_frame(win, model, 0, idle_motion, clothes=1.0,
+            viewer_frame(win, model, 0, idle_motion, clothes=0.0,
                          present_lookup=present_lookup, tug=(0.0, 0.0),
                          valid=model_ids)
         else:
-            render_frame(win, model, 0, present_lookup,   # clothes None = auto sway
+            render_frame(win, model, 0, present_lookup, clothes=0.0,
                          tug=(0.0, 0.0), valid=model_ids)
 
         if args.self_test:
@@ -1097,7 +1098,7 @@ def main():
               "hips/thighs to make her shy instantly (Alt+F4 works too)")
         f = 0
         prev_keys = {}
-        clothes_level = 1.0               # animated jacket level (0 = off, 1 = on)
+        clothes_level = 0.0               # Param2 level: 0 = dressed, 1 = coat removed
         while True:
             if glfw.window_should_close(win.window) or \
                glfw.get_key(win.window, glfw.KEY_ESCAPE) == glfw.PRESS:
@@ -1130,15 +1131,13 @@ def main():
                 win.set_scale(scale)
                 print(f"scale reset = {scale:.2f}")
 
-            # jacket: follow the manual toggle (None = the demo keeps its auto
-            # coat on/off). Animating the level gives a smooth take-off / put-on.
+            # jacket: Param2 0 = dressed, 1 = coat removed (probed: llny names
+            # it 去外套). Default dressed; a right-double-click toggles it and
+            # the animated level makes the take-off / put-on smooth.
             c = control.clothes
-            if c is None and not express and not args.viewer:
-                clothes_value = None
-            else:
-                target = 1.0 if c is not False else 0.0
-                clothes_level += (target - clothes_level) * 0.06
-                clothes_value = clothes_level
+            target = 0.0 if c else 1.0
+            clothes_level += (target - clothes_level) * 0.06
+            clothes_value = clothes_level
 
             # locked-drag tug: follow the mouse pull while held, then glide back
             # to (0,0) on release — attack fast, decay slow so it eases home
