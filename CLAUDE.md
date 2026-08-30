@@ -49,7 +49,7 @@ python desktop_pet.py --self-test --emotion 兴奋       # 自检一帧（不弹
 - `ParamBodyAngleX` = **躯干转身**（chest 横扫、脚锚定、+ 与 AX 同号）——不是前后倾；`ParamBodyAngleY` = 垂直伸缩（− = 下蹲变矮）；`ParamBodyAngleZ` = 髋反向摆。
 - `Param2` "去外套"：**0 = 穿着（默认），1 = 脱掉**（代码注释曾写反，已修正）。
 - `Param28` "yy" 负值夹腿；`Param27` "zz" 是全身绕脚旋转（不能夹腿）。
-- `Param41` = 左臂、`Param43` = 右臂（±30 手只到髋部高度，**做不了双手交叉挡私处**）。
+- `Param41` = 左臂、`Param43` = 右臂（±30 手只到髋部高度，**做不了双手在身前交叉遮挡**）。
 - `ParamEyeBallX + = 右`、`ParamEyeBallY + = 上`（害羞看下用负值）。
 - 角度物理会甩发，像素度量用**皮肤质心**；探针要 `ResetParameters()` + 预热 20 帧。
 
