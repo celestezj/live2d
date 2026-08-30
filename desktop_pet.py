@@ -198,9 +198,10 @@ class LayeredWindow:
         self._drag = None                         # (win_x, win_y, cursor_x, cursor_y)
         self._last_click = {"L": (0.0, None),     # (glfw time, (x, y)) per button
                             "R": (0.0, None)}     #   for double-click detection
+        self._pending = {}                        # key -> (deadline, on_single)
         self.clothes_cb = None                    # called on right-double-click (jacket)
-        self.lock_cb = None                       # called on left-double-click (position)
-        self.locked = False                       # left-double-click toggles: locked = no drag
+        self.lock_cb = None                       # called on right-single-click (position)
+        self.locked = False                       # right-single-click toggles: locked = no drag
         self.tug = (0.0, 0.0)                     # applied tug, smoothed toward tug_target
         self.tug_target = (0.0, 0.0)              # mouse writes this while tugging (locked)
         self._tug_anchor = None                   # (x, y) where the tug press started
@@ -225,13 +226,15 @@ class LayeredWindow:
         if action == glfw.PRESS:
             x, y = glfw.get_cursor_pos(window)
             if button == glfw.MOUSE_BUTTON_RIGHT:
-                self._maybe_double_click("R", x, y, self._on_jacket_double_click)
+                # right-single-click locks/unlocks the position; a right
+                # double-click takes the jacket off/on instead (the pair is
+                # consumed by the double-click, so the lock never fires).
+                self._maybe_double_or_single(
+                    "R", x, y, self._on_jacket_double_click,
+                    self._on_lock_single_click)
                 return
             if button != glfw.MOUSE_BUTTON_LEFT:
                 return
-            # left press on the character
-            if self._maybe_double_click("L", x, y, self._on_lock_double_click):
-                return                       # double-click consumed (lock toggled)
             if not self._hit_character(x, y):
                 return                       # ignore clicks on transparent pixels
             if self.locked:
@@ -247,10 +250,13 @@ class LayeredWindow:
             self.tug_zone = "body"
             self.tug_target = (0.0, 0.0)
 
-    def _maybe_double_click(self, key, x, y, on_double):
-        """A second click on the character within ~0.5s (and <24px from the
-        previous one) is a double-click: fire on_double() once and return True.
-        Returns False for a first/single click (records it for the next one)."""
+    def _maybe_double_or_single(self, key, x, y, on_double, on_single):
+        """Handle a click that is either the first half of a double-click or a
+        standalone single click. A second click within ~0.5s (and <24px from
+        the previous one) fires on_double() immediately and cancels the pending
+        single; otherwise the press is remembered and on_single() fires after
+        SINGLE_CLICK_DELAY s (checked once per frame) if no second click turns
+        it into a double-click."""
         if not self._hit_character(x, y):
             return False
         now = glfw.get_time()
@@ -258,16 +264,34 @@ class LayeredWindow:
         if (now - t0) < 0.5 and p0 is not None and \
                 abs(x - p0[0]) < 24 and abs(y - p0[1]) < 24:
             self._last_click[key] = (0.0, None)      # consumed the pair
+            self._pending.pop(key, None)             # cancel the pending single
             on_double()
             return True
+        # not a double-click: a still-pending single was a real one (no
+        # qualifying second click arrived) — fire it now, then start a new one.
+        pending = self._pending.pop(key, None)
+        if pending is not None:
+            pending[1]()
         self._last_click[key] = (now, (x, y))
+        self._pending[key] = (now + SINGLE_CLICK_DELAY, on_single)
         return False
+
+    def _fire_pending_click(self):
+        """Fire single-click actions whose confirm window has elapsed. Called
+        once per frame: a lone click still works, but the double-click detector
+        gets its short wait to make sure no second click is coming."""
+        now = glfw.get_time()
+        for key in list(self._pending):
+            deadline, on_single = self._pending[key]
+            if now >= deadline:
+                del self._pending[key]
+                on_single()
 
     def _on_jacket_double_click(self):
         if self.clothes_cb is not None:
             self.clothes_cb()
 
-    def _on_lock_double_click(self):
+    def _on_lock_single_click(self):
         self.locked = not self.locked
         if self.lock_cb is not None:
             self.lock_cb(self.locked)
@@ -506,6 +530,8 @@ def new_emotion_state(model, emotion):
 # yaw — ParamBodyAngleY is a vertical stretch (hgt 705 vs 678 at ±10) and
 # ParamBodyAngleZ leans the upper body while the hips counter-swing. So a body
 # tug is faked as the head leading the turn plus a slight lean along it.
+SINGLE_CLICK_DELAY = 0.5          # wait this long (>= the 0.5s double-click
+                                  # window) before a lone right-click locks
 HEAD_ZONE = 0.40                  # anchor y < 40% of window height = grabbed the head
 HEAD_TURN_AMP = 25.0              # head turns toward the drag (ParamAngleX, yaw)
 HEAD_TUG_AMP = 20.0               # head looks up/down with the drag (ParamAngleY, pitch)
@@ -882,7 +908,7 @@ def main():
             print("jacket: " + ("on" if dressed else "off"))
         win.clothes_cb = _toggle_clothes
 
-        def _on_lock(locked):                       # left-double-click on the pet
+        def _on_lock(locked):                       # right-click on the pet
             print("position: " + ("locked (drag disabled)" if locked
                                   else "unlocked (drag to move)"))
         win.lock_cb = _on_lock
@@ -952,7 +978,7 @@ def main():
             control_server = start_control_server(args.control_port, control)
 
         print("transparent pet running — press ESC to quit, +/- to resize, "
-              "0 to reset; left-DOUBLE-click to lock/unlock position, "
+              "0 to reset; right-click to lock/unlock position, "
               "right-DOUBLE-click to take the jacket off/on; while locked, "
               "drag the head to turn/nod it, drag the body to turn it "
               "(Alt+F4 works too)")
@@ -963,6 +989,8 @@ def main():
             if glfw.window_should_close(win.window) or \
                glfw.get_key(win.window, glfw.KEY_ESCAPE) == glfw.PRESS:
                 break
+
+            win._fire_pending_click()     # confirm lone right-clicks (lock/unlock)
 
             # live resize: edge-triggered + / - / 0 (window needs focus first)
             pressed = {}
