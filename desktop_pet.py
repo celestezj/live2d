@@ -206,6 +206,11 @@ class LayeredWindow:
         self.tug_target = (0.0, 0.0)              # mouse writes this while tugging (locked)
         self._tug_anchor = None                   # (x, y) where the tug press started
         self.tug_zone = "body"                    # "head" | "body" (from the grab point)
+        self.scale = 1.0                          # live model scale (the + / - / 0
+                                                  # keys change it); the click-zone
+                                                  # thresholds are derived from it
+                                                  # in _zone_y, so they follow the
+                                                  # scaled character on screen
         glfw.set_mouse_button_callback(self.window, self._on_mouse_button)
         glfw.set_cursor_pos_callback(self.window, self._on_cursor_pos)
 
@@ -221,6 +226,19 @@ class LayeredWindow:
             return False
         # last_rgba is bottom-up: row 0 = bottom of the window
         return alpha[self.h - 1 - int(y), int(x), 3] >= 16
+
+    def set_scale(self, s):
+        """Keep the click zones in sync with the model scale. main() calls this
+        whenever the + / - / 0 keys change it (probed: the character is scaled
+        around the window centre, so its parts move as scale changes)."""
+        self.scale = s
+
+    def _zone_y(self, canvas_frac):
+        """Window y (content coords, y down) of a body-part boundary. The llny
+        canvas (1300x1800) is scaled to fit the window by height and centred, so
+        a canvas-height-fraction lands at h * (0.5 + (cf - 0.5) * scale) — the
+        fixed HEAD_ZONE/LEG_ZONE fractions only match the window at scale 1.0."""
+        return self.h * (0.5 + (canvas_frac - 0.5) * self.scale)
 
     def _on_mouse_button(self, window, button, action, mods):
         if action == glfw.PRESS:
@@ -242,21 +260,23 @@ class LayeredWindow:
             dbl = ((now - t0) < 0.5 and p0 is not None
                    and abs(x - p0[0]) < 24 and abs(y - p0[1]) < 24)
             self._last_click["L"] = ((0.0, None) if dbl else (now, (x, y)))
-            if dbl and y >= self.h * HEAD_ZONE:   # double-click below the head
-                self._drag = None                 # triggers the same shy +
-                self._tug_anchor = None           # legs-together as a thigh
-                self.tug_zone = "legs"            # drag, but instant — in
-                self.tug = SHY_IMPULSE            # practice it only fires on
-                self.tug_target = SHY_IMPULSE     # the legs (thighs and below;
-                                                  # chest/private don't), holds
-                                                  # while pressed, then eases
-                                                  # out on release (tug_zone
-                                                  # stays frozen in the decay)
+            if dbl and y >= self._zone_y(LEG_ZONE):  # double-click on the legs
+                self._drag = None                 # area (thighs and below; the
+                self._tug_anchor = None           # boundary tracks the scaled
+                self.tug_zone = "legs"            # character, so the zone stays
+                self.tug = SHY_IMPULSE            # put whatever the scale — the
+                self.tug_target = SHY_IMPULSE     # chest/private area don't
+                                                  # count): the same shy + legs-
+                                                  # together as a thigh drag, but
+                                                  # instant — holds while pressed,
+                                                  # then eases out on release
+                                                  # (tug_zone stays frozen in
+                                                  # the decay)
                 return
             if self.locked:
                 self._tug_anchor = (x, y)    # locked: tug the pet in place
-                self.tug_zone = ("head" if y < self.h * HEAD_ZONE else
-                                 "legs" if y >= self.h * LEG_ZONE else "body")
+                self.tug_zone = ("head" if y < self._zone_y(HEAD_ZONE) else
+                                 "legs" if y >= self._zone_y(LEG_ZONE) else "body")
                 self.tug_target = (0.0, 0.0)
                 return
             wx, wy = glfw.get_window_pos(window)
@@ -553,14 +573,19 @@ def new_emotion_state(model, emotion):
 # tug is faked as the head leading the turn plus a slight lean along it.
 SINGLE_CLICK_DELAY = 0.5          # wait this long (>= the 0.5s double-click
                                   # window) before a lone right-click locks
-HEAD_ZONE = 0.40                  # anchor y < 40% of window height = grabbed the head
+HEAD_ZONE = 0.40                  # canvas fraction: grab point below this (in the
+                                  # model's own height) is the body, above is the
+                                  # head. The on-screen threshold is scale-aware:
+                                  # see LayeredWindow._zone_y
 HEAD_TURN_AMP = 25.0              # head turns toward the drag (ParamAngleX, yaw)
 HEAD_TUG_AMP = 20.0               # head looks up/down with the drag (ParamAngleY, pitch)
 BODY_TURN_AMP = 15.0              # head leads the body turn toward the drag (ParamAngleX)
 BODY_LEAN_AMP = 5.0               # torso leans along the turn (ParamBodyAngleZ, - = toward drag)
 BODY_TUG_AMP = 5.0                # body leans fwd/back with a vertical drag (ParamBodyAngleX)
-LEG_ZONE = 0.55                   # anchor y >= 55% = grabbed the legs (covers the
-                                  # thigh root, not just the knees)
+LEG_ZONE = 0.55                   # canvas fraction: grab point at/above this (in
+                                  # the model's own height) is the legs (covers the
+                                  # thigh root, not just the knees). Also the
+                                  # left-double-click shy-trigger boundary
 LEG_CLOSE_AMP = 9.0               # Param28 "yy": probed — negative squeezes the legs
                                   # together (the two leg columns visibly merge)
 SHY_SQUAT_AMP = 7.0               # ParamBodyAngleY -: whole body lowers a touch
@@ -963,6 +988,7 @@ def main():
         model.Resize(args.width, args.height)
         scale = args.scale                       # absolute factor (scale ~= fit window)
         model.SetScale(scale)
+        win.set_scale(scale)                     # click zones track the scaled body
 
         present_lookup = param_lookup(model, ["Param14", "Param2"])
         if "Param14" in present_lookup:          # llny: remove watermark
@@ -1084,14 +1110,17 @@ def main():
             if pressed.get(glfw.KEY_EQUAL) or pressed.get(glfw.KEY_KP_ADD):
                 scale = min(10.0, scale * 1.15)
                 model.SetScale(scale)
+                win.set_scale(scale)
                 print(f"scale = {scale:.2f}")
             if pressed.get(glfw.KEY_MINUS) or pressed.get(glfw.KEY_KP_SUBTRACT):
                 scale = max(0.1, scale / 1.15)
                 model.SetScale(scale)
+                win.set_scale(scale)
                 print(f"scale = {scale:.2f}")
             if pressed.get(glfw.KEY_0):
                 scale = args.scale
                 model.SetScale(scale)
+                win.set_scale(scale)
                 print(f"scale reset = {scale:.2f}")
 
             # jacket: follow the manual toggle (None = the demo keeps its auto
