@@ -427,7 +427,7 @@ for p in table:
 
 **细节部件旋转（-45~45）**：`Param_Angle_Rotation_N_ArtMeshXXX`，对应丸子头/后发/袜子结/草莓结/外套结等单个部件。
 
-完整清单见同目录 `llny_params.txt`。
+完整清单见同目录 `llny_params.txt`。16 种情绪的姿态配方在 `desktop_pet.py` 的 `EMOTIONS` 表（加情绪/调表情改这里），随机动作表在 `GESTURES`（`--random-actions`），各自的说话音量系数在 `MOUTH_AMP`。
 
 ---
 
