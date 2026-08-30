@@ -239,7 +239,8 @@ class LayeredWindow:
                 return                       # ignore clicks on transparent pixels
             if self.locked:
                 self._tug_anchor = (x, y)    # locked: tug the pet in place
-                self.tug_zone = ("head" if y < self.h * HEAD_ZONE else "body")
+                self.tug_zone = ("head" if y < self.h * HEAD_ZONE else
+                                 "legs" if y >= self.h * LEG_ZONE else "body")
                 self.tug_target = (0.0, 0.0)
                 return
             wx, wy = glfw.get_window_pos(window)
@@ -542,6 +543,23 @@ HEAD_TUG_AMP = 20.0               # head looks up/down with the drag (ParamAngle
 BODY_TURN_AMP = 15.0              # head leads the body turn toward the drag (ParamAngleX)
 BODY_LEAN_AMP = 5.0               # torso leans along the turn (ParamBodyAngleZ, - = toward drag)
 BODY_TUG_AMP = 5.0                # body leans fwd/back with a vertical drag (ParamBodyAngleX)
+LEG_ZONE = 0.55                   # anchor y >= 55% = grabbed the legs (covers the
+                                  # thigh root, not just the knees)
+LEG_CLOSE_AMP = 9.0               # Param28 "yy": probed — negative squeezes the legs
+                                  # together (the two leg columns visibly merge)
+SHY_SQUAT_AMP = 7.0               # ParamBodyAngleY -: whole body lowers a touch
+                                  # (a slight squat; probed: - = shorter)
+SHY_ARM_AMP = 15.0                # arms tuck inward (Param41 + / Param43 -). llny's
+                                  # rig only swings the arms at the sides — the hands
+                                  # cannot cross over the crotch, this is the shy
+                                  # defensive tuck it can do.
+SHY_BLUSH_AMP = 0.85              # Param13 脸红 (very shy blush)
+SHY_PUFF_AMP = 0.6                # Param58 鼓脸 (puffed cheeks)
+SHY_GAZE_DOWN = 0.35              # eye balls cast down (probed: ParamEyeBallY - = down)
+SHY_GAZE_SIDE = 0.25              # averted gaze (probed: ParamEyeBallX + = right)
+SHY_LID = 0.25                    # half-lidded bashful eyes (ParamEyeLOpen/R -)
+SHY_LOOKDOWN = 5.0                # head pitches down a touch (ParamAngleY -)
+SHY_MOUTH = 0.3                   # soft bashful smile (ParamMouthForm +)
 TUG_ATTACK_RATE = 0.15            # follow the mouse pull while held (per-frame)
 TUG_RELEASE_RATE = 0.07           # glide back to (0,0) on release: slower, so the
                                   # pose eases home instead of snapping
@@ -567,6 +585,11 @@ def _apply_tug(model, valid, tug, zone="body"):
       (ParamAngleX) and the torso leans along it (ParamBodyAngleZ, so the
       shoulders shift toward the drag while the feet stay anchored); a vertical
       pull leans the body forward/back (ParamBodyAngleX).
+    - legs zone: any pull makes her shy — a slight squat (ParamBodyAngleY -),
+      the thighs squeezed together (Param28 "yy" goes negative, probed: it closes
+      the two leg columns, unlike Param27 which is a whole-body turn), the arms
+      tucked inward (Param41 + / Param43 -), plus a bashful face: blush, puffed
+      cheeks, downcast+averted eyes, half-lidded.
     Values are additive on top of the pose; the main loop decays `tug` to
     (0,0) on release so the pet returns to its normal pose."""
     if not valid or not tug or not any(tug):
@@ -577,6 +600,32 @@ def _apply_tug(model, valid, tug, zone="body"):
             _add_param_delta(model, "ParamAngleX", tx * HEAD_TURN_AMP)
         if ty and "ParamAngleY" in valid:
             _add_param_delta(model, "ParamAngleY", -ty * HEAD_TUG_AMP)
+    elif zone == "legs":                        # shy: squat + thighs together +
+        s = min(1.0, math.hypot(tx, ty))        # bashful face + arms tucked inward
+        if "Param28" in valid:                  # Param28 "yy": negative closes legs
+            _add_param_delta(model, "Param28", -LEG_CLOSE_AMP * s)
+        if "ParamBodyAngleY" in valid:          # slight squat: whole body lowers
+            _add_param_delta(model, "ParamBodyAngleY", -SHY_SQUAT_AMP * s)
+        if "Param41" in valid:                  # arms tuck toward the front (the rig
+            _add_param_delta(model, "Param41", SHY_ARM_AMP * s)      # only swings at
+        if "Param43" in valid:                  # the sides — can't cross the crotch)
+            _add_param_delta(model, "Param43", -SHY_ARM_AMP * s)
+        if "Param13" in valid:                  # 脸红 blush
+            _add_param_delta(model, "Param13", SHY_BLUSH_AMP * s)
+        if "Param58" in valid:                  # 鼓脸 puffed cheeks
+            _add_param_delta(model, "Param58", SHY_PUFF_AMP * s)
+        if "ParamEyeBallY" in valid:            # eyes cast down (probed: - = down)
+            _add_param_delta(model, "ParamEyeBallY", -SHY_GAZE_DOWN * s)
+        if "ParamEyeBallX" in valid:            # avert the gaze (probed: + = right)
+            _add_param_delta(model, "ParamEyeBallX", SHY_GAZE_SIDE * s)
+        if "ParamEyeLOpen" in valid:            # half-lidded, bashful
+            _add_param_delta(model, "ParamEyeLOpen", -SHY_LID * s)
+        if "ParamEyeROpen" in valid:
+            _add_param_delta(model, "ParamEyeROpen", -SHY_LID * s)
+        if "ParamAngleY" in valid:              # head casts down a touch
+            _add_param_delta(model, "ParamAngleY", -SHY_LOOKDOWN * s)
+        if "ParamMouthForm" in valid:           # soft bashful smile
+            _add_param_delta(model, "ParamMouthForm", SHY_MOUTH * s)
     else:                                       # body: turn, head leads + lean
         if tx and "ParamAngleX" in valid:
             _add_param_delta(model, "ParamAngleX", tx * BODY_TURN_AMP)
@@ -987,8 +1036,8 @@ def main():
         print("transparent pet running — press ESC to quit, +/- to resize, "
               "0 to reset; right-click to lock/unlock position, "
               "right-DOUBLE-click to take the jacket off/on; while locked, "
-              "drag the head to turn/nod it, drag the body to turn it "
-              "(Alt+F4 works too)")
+              "drag the head to turn/nod it, drag the body to turn it, drag "
+              "the legs to make her shy (thighs together) (Alt+F4 works too)")
         f = 0
         prev_keys = {}
         clothes_level = 1.0               # animated jacket level (0 = off, 1 = on)
