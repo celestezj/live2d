@@ -220,6 +220,11 @@ python desktop_pet.py --model /path/to/xxx.model3.json
 python desktop_pet.py --width 520 --height 720 --x 100 --y 100
 python desktop_pet.py --scale 0.6             # 初始人物大小（1.0 = 撑满窗口）
 python desktop_pet.py --viewer                # 原生动态（接近 Live2DViewer 默认）
+python desktop_pet.py --emotion 开心          # 情绪模式：从该情绪开始
+python desktop_pet.py --emotion 兴奋 --lipsync /path/to/speech.wav --lipsync-device 0
+                                              # 自播 wav + 说话自动对口型
+python desktop_pet.py --emotion 开心 --listen # 监听系统播放，任何播放器自动对口
+python desktop_pet.py --control-port 5000     # 开 TCP 控制口，外部随时切情绪/嘴
 python desktop_pet.py --self-test             # 只渲染一帧透明图并输出 alpha 统计
 ```
 
@@ -229,6 +234,25 @@ python desktop_pet.py --self-test             # 只渲染一帧透明图并输�
 - **退出**：按 `ESC`（或 `Alt+F4`）。
 - 内置演示动画：去水印（Param14）+ 眨眼 + 说话 + 轻微摇头 + 外套缓慢穿脱。自测输出示例：`corner alpha mean = 0.000`（背景全透明）、`opaque px = 19%`（人物实体）。
 - **`--viewer` 待机模式（接近 Live2DViewer 默认）**：复刻 Live2DViewer 加载 llny 后的默认待机——Python 驱动**规律眨眼**（约每 2.8 秒一次）+ **多轴头/身体摆动**（ParamAngleX/Y/Z ±6~10°、ParamBodyAngleX/Y/Z），这些角度正是 `llny.physics3.json` 的物理输入；`model.Update()` 内部求值物理，把 84 个 ArtMesh 旋转参数（丸子头、束发、后发、草莓结等）带动 ±5~13°——这就是原版里"耳朵/头发会动"的机制。模型自带的孤儿 idle 运动 `motions/idel.motion3.json`（约 3 秒：呼吸 + 轻微肢体摆动）持续循环。比纯 SDK 自动模式（眨眼稀疏、摆动不可调）更接近原版。拖拽/缩放/退出按键与默认模式完全一致。
+
+- **`--emotion NAME` 情绪模式（express）**：在 `--viewer` 那套待机（规律眨眼 + 多轴摆动 + 物理甩发）之上叠加情绪姿态，共 **16 种**：平和、开心、兴奋、惊喜、温柔、关切、好奇、期待、无奈、失望、沮丧、难过、担心、不满、生气、愤怒。每种都由 llny 现有参数设计（眉毛角度/形态、眼开/笑、嘴型/开合、脸红/生气/哭等叠画开关、头/身角度），例如 愤怒 = 眉下压 + 咧嘴 + 生气记号 + 脸红 + 泪 + 头微侧，温柔 = 嘴角上扬 + 浅笑 + 脸红。情绪切换约 **0.25 秒平滑交叉淡入**（`blend = blend*0.82 + target*0.18`）；**未被当前情绪使用的叠画开关会自动淡回 0**，不会残留上一个表情的生气/脸红/鼓脸。纯 `--viewer` 不加任何参数即回到原待机，默认演示（`render_frame`）与 `--viewer` 逻辑保持不变。
+
+- **`--lipsync wav` 说话对口型**：宠物自己播放该音轨（soundfile 解码，wav/flac/ogg 均可），并**逐块计算 RMS 能量**（0~1）驱动 `ParamMouthOpenY`——**嘴巴跟随音频能量开合，对上口型**；音轨循环播放。每段情绪的"说话音量"不同（`MOUTH_AMP`：兴奋/愤怒 1.25~1.3 张得更大，温柔/沮丧 0.6 张得更小），播放间隙嘴回到该情绪自带的嘴型开度。没有可用音频输出（如远程桌面的"幽灵"设备）时打印警告并自动跳过，不会卡死；用 `--lipsync-device` 指定输出设备号（先 `python -c "import sounddevice as sd; print(sd.query_devices())"` 查看）。
+
+- **`--listen` 监听系统播放（自动对口）**：宠物**不需要拿到音频文件**——它用 WASAPI **回环捕获**实时"偷听"电脑正在输出的声音，逐块 RMS 驱动嘴巴。你的 AI 管线（或任何播放器）正常放声音，嘴就自动跟上；不说话就闭口。这就是"随着音频播放器自动控制"。依赖 `pyaudiowpatch`（已装入 voice-asr 环境）。自动选第一个 `[Loopback]` 设备；可用 `--listen-device` 指定设备号（先 `python -c "from system_listen import list_loopback_devices; list_loopback_devices()"` 查看）。注意：回环会听到**系统所有声音**（音乐、视频也会带动嘴）；且需要一台有真实音频输出的机器，远程桌面的幽灵设备上不会出声。`--lipsync` 与 `--listen` 互斥。
+
+- **`--control-port PORT` 外部随时控制**：在 `127.0.0.1:PORT` 起一个 TCP 服务，**每行一个 JSON** 即可随时切换情绪 / 控制嘴巴开合——适合接 AI 语音输出管线：
+  ```python
+  import socket
+  s = socket.create_connection(("127.0.0.1", 5000))
+  s.sendall(b'{"emotion":"开心"}\n')      # 切情绪（未知情绪被忽略并打印）
+  s.sendall(b'{"emotion":"愤怒"}\n')
+  s.sendall(b'{"mouth":0.7}\n')           # 强制嘴开 0.7（0~1）
+  s.sendall(b'{"mouth":null}\n')          # 释放嘴，回到待机/对口型的自动嘴
+  ```
+  命令在一条连接里可连发多条；情绪切换同样约 0.25 秒平滑过渡。
+
+- **三者组合（推荐场景）**：`--emotion 兴奋 --lipsync /path/to/speech.wav --control-port 5000` 同时开启——宠物自播 wav 对口型，AI 管线经 TCP 随时切当前情绪。注意：**说话期间 TCP 的 `{"mouth":..}` 会被音频能量覆盖**（对口型拥有嘴），发 `{"mouth":null}` 才释放回待机。
 
 ---
 
@@ -329,6 +353,8 @@ for p in table:
 | `python param_control.py list` | 枚举模型全部参数（id/名称/min/max/default），自动读取同目录 `.cdi3.json` 配名字 |
 | `python param_control.py set --param Param14=1 Param2=0.6 --out x.png` | 设参数截一帧 |
 | `python param_control.py anim --frames 180` | 关键帧动画演示（去水印+眨眼+说话+摇头+脱外套） |
+
+配套的 **`lipsync.py`** 是 `--lipsync` 的底层模块：`play_wav_with_energy(path, on_energy, on_done, device=None)` 播放任意 wav 并逐块回调 `on_energy(rms01)`（0~1 归一化 RMS，阈值 `RMS_FLOOR=0.012`、满开 `RMS_FULL=0.16`），播完回调 `on_done()` 一次；放后台线程调用即可给宠物喂"嘴型能量"。
 
 ### 5.6 llny 模型参数速查
 
