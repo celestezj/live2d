@@ -196,6 +196,8 @@ class LayeredWindow:
         self.last_rgba = None                     # straight-alpha RGBA (bottom-up)
 
         self._drag = None                         # (win_x, win_y, cursor_x, cursor_y)
+        self._last_rclick = (0.0, None)           # (glfw time, (x, y)) for right dbl-click
+        self.clothes_cb = None                    # called on right-double-click (jacket)
         glfw.set_mouse_button_callback(self.window, self._on_mouse_button)
         glfw.set_cursor_pos_callback(self.window, self._on_cursor_pos)
 
@@ -213,6 +215,10 @@ class LayeredWindow:
         return alpha[self.h - 1 - int(y), int(x), 3] >= 16
 
     def _on_mouse_button(self, window, button, action, mods):
+        if button == glfw.MOUSE_BUTTON_RIGHT:
+            if action == glfw.PRESS:                 # right-double-click toggles clothes
+                self._maybe_double_click(*glfw.get_cursor_pos(window))
+            return
         if button != glfw.MOUSE_BUTTON_LEFT:
             return
         if action == glfw.PRESS:
@@ -223,6 +229,21 @@ class LayeredWindow:
             self._drag = (wx, wy, cx, cy)
         elif action == glfw.RELEASE:
             self._drag = None
+
+    def _maybe_double_click(self, x, y):
+        """A second right-click on the character within ~0.5s (and near the
+        previous one) is a double-click -> toggle the clothes via clothes_cb."""
+        if not self._hit_character(x, y):
+            return
+        now = glfw.get_time()
+        t0, p0 = self._last_rclick
+        if (now - t0) < 0.5 and p0 is not None and \
+                abs(x - p0[0]) < 24 and abs(y - p0[1]) < 24:
+            self._last_rclick = (0.0, None)          # consumed the pair
+            if self.clothes_cb is not None:
+                self.clothes_cb()
+        else:
+            self._last_rclick = (now, (x, y))
 
     def _on_cursor_pos(self, window, x, y):
         if self._drag is None:
@@ -408,6 +429,7 @@ class PetControl:
         self._lock = threading.Lock()
         self.emotion = emotion
         self.mouth = None                 # None = not talking, 0..1 = forced open
+        self.clothes = None               # None = auto (demo coat sway), False = off, True = on
 
     def set_emotion(self, name):
         if name not in EMOTIONS:
@@ -419,6 +441,13 @@ class PetControl:
     def set_mouth(self, level):
         with self._lock:
             self.mouth = None if level is None else clamp(level, 0.0, 1.0)
+
+    def toggle_clothes(self):
+        """Flip the jacket: first call takes it off, next puts it back on.
+        Returns the new state (True = dressed, False = undressed)."""
+        with self._lock:
+            self.clothes = False if self.clothes is None else (not self.clothes)
+        return self.clothes
 
     def snapshot(self):
         with self._lock:
@@ -438,11 +467,14 @@ def new_emotion_state(model, emotion):
             "mouth_cur": pose.get("ParamMouthOpenY", 0.0)}
 
 
-def express_frame(win, model, f, control, idle_motion, state):
+def express_frame(win, model, f, control, idle_motion, state, clothes=None):
     """One frame of express mode: an emotion pose (cross-faded over ~15 frames)
     plus the viewer-style blink and sway, and a mouth that follows the WAV's
     RMS energy scaled by MOUTH_AMP while playing (otherwise the pose's own
-    mouth opening)."""
+    mouth opening).
+
+    clothes: 0..1 jacket level from a right-double-click toggle (None = keep
+    the model's default dress state)."""
     emotion, mouth_lvl = control.snapshot()
     keys = state["keys"]
     valid = state["valid"]
@@ -499,6 +531,8 @@ def express_frame(win, model, f, control, idle_motion, state):
 
     if idle_motion is not None and model.IsMotionFinished():
         model.StartMotion("Idle", 0, priority=1)
+    if clothes is not None and "Param2" in valid:
+        model.SetParameterValue("Param2", clothes)   # right-dbl-click jacket toggle
     model.Update()
     live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)       # fully transparent background
     GL.glEnable(GL.GL_BLEND)
@@ -508,8 +542,10 @@ def express_frame(win, model, f, control, idle_motion, state):
     glfw.poll_events()
 
 
-def render_frame(win, model, f, present_lookup):
-    """Drive one animation frame; returns the alpha channel (HxW uint8)."""
+def render_frame(win, model, f, present_lookup, clothes=None):
+    """Drive one animation frame; returns the alpha channel (HxW uint8).
+    clothes: None = keep the demo's auto coat on/off, 0..1 = forced jacket
+    level (right-double-click toggles it)."""
     blink_frames = [{"ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0},
                     {"ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0},
                     {"ParamEyeLOpen": 0.05, "ParamEyeROpen": 0.05},
@@ -527,8 +563,11 @@ def render_frame(win, model, f, present_lookup):
 
     model.SetParameterValue("ParamMouthOpenY", 0.5 + 0.5 * math.sin(f * 0.30))
     model.SetParameterValue("ParamAngleZ", math.sin(f * 0.05) * 8.0)
-    if "Param2" in present_lookup:               # coat slowly on/off
-        model.SetParameterValue("Param2", 0.5 + 0.5 * math.sin(f * 0.01))
+    if "Param2" in present_lookup:               # coat on/off (auto sway or manual)
+        if clothes is None:
+            model.SetParameterValue("Param2", 0.5 + 0.5 * math.sin(f * 0.01))
+        else:
+            model.SetParameterValue("Param2", clothes)
 
     model.Update()
     live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)       # fully transparent background
@@ -555,7 +594,7 @@ def find_idle_motion(model_json):
     return None
 
 
-def viewer_frame(win, model, f, idle_motion=None):
+def viewer_frame(win, model, f, idle_motion=None, clothes=None, present_lookup=None):
     """One frame of the Live2DViewer-style idle.
 
     A regular blink plus a gentle multi-axis head/body sway are written from
@@ -563,6 +602,9 @@ def viewer_frame(win, model, f, idle_motion=None):
     inside model.Update(), then swings the hair/ear/bow ArtMeshes — that is
     what makes the ears/hair visibly move. The model's own idle motion loops
     underneath (llny's motions/idel.motion3.json: 3s breath + subtle body).
+
+    clothes: 0..1 jacket level from a right-double-click toggle (None = keep
+    the model's default dress state).
     """
     # blink: eyes closed to 0.05 and open again, every ~2.8 s
     blink_dur, blink_len = 170, 12
@@ -585,6 +627,8 @@ def viewer_frame(win, model, f, idle_motion=None):
 
     if idle_motion is not None and model.IsMotionFinished():
         model.StartMotion("Idle", 0, priority=1)
+    if clothes is not None and present_lookup is not None and "Param2" in present_lookup:
+        model.SetParameterValue("Param2", clothes)   # right-dbl-click jacket toggle
     model.Update()
     live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)       # fully transparent background
     GL.glEnable(GL.GL_BLEND)
@@ -737,6 +781,11 @@ def main():
         control = PetControl(emotion)
         estate = new_emotion_state(model, emotion)
 
+        def _toggle_clothes():                      # right-double-click on the pet
+            dressed = control.toggle_clothes()
+            print("jacket: " + ("on" if dressed else "off"))
+        win.clothes_cb = _toggle_clothes
+
         idle_motion = None
         if args.viewer or express:
             idle_motion = find_idle_motion(args.model)
@@ -748,11 +797,12 @@ def main():
                 print("no idle motion found; blink/sway/physics only")
 
         if express:
-            express_frame(win, model, 0, control, idle_motion, estate)
+            express_frame(win, model, 0, control, idle_motion, estate, clothes=1.0)
         elif args.viewer:
-            viewer_frame(win, model, 0, idle_motion)
+            viewer_frame(win, model, 0, idle_motion, clothes=1.0,
+                         present_lookup=present_lookup)
         else:
-            render_frame(win, model, 0, present_lookup)
+            render_frame(win, model, 0, present_lookup)   # clothes None = auto sway
 
         if args.self_test:
             raw = win.last_rgba
@@ -798,9 +848,11 @@ def main():
             control_server = start_control_server(args.control_port, control)
 
         print("transparent pet running — press ESC to quit, +/- to resize, "
-              "0 to reset (Alt+F4 works too)")
+              "0 to reset; right-DOUBLE-click the pet to take the jacket "
+              "off/on (Alt+F4 works too)")
         f = 0
         prev_keys = {}
+        clothes_level = 1.0               # animated jacket level (0 = off, 1 = on)
         while True:
             if glfw.window_should_close(win.window) or \
                glfw.get_key(win.window, glfw.KEY_ESCAPE) == glfw.PRESS:
@@ -828,12 +880,24 @@ def main():
                 model.SetScale(scale)
                 print(f"scale reset = {scale:.2f}")
 
-            if express:
-                express_frame(win, model, f, control, idle_motion, estate)
-            elif args.viewer:
-                viewer_frame(win, model, f, idle_motion)
+            # jacket: follow the manual toggle (None = the demo keeps its auto
+            # coat on/off). Animating the level gives a smooth take-off / put-on.
+            c = control.clothes
+            if c is None and not express and not args.viewer:
+                clothes_value = None
             else:
-                render_frame(win, model, f, present_lookup)
+                target = 1.0 if c is not False else 0.0
+                clothes_level += (target - clothes_level) * 0.06
+                clothes_value = clothes_level
+
+            if express:
+                express_frame(win, model, f, control, idle_motion, estate,
+                              clothes=clothes_value)
+            elif args.viewer:
+                viewer_frame(win, model, f, idle_motion, clothes=clothes_value,
+                             present_lookup=present_lookup)
+            else:
+                render_frame(win, model, f, present_lookup, clothes=clothes_value)
             f += 1
     finally:
         if control_server is not None:
