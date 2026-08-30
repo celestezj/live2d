@@ -63,7 +63,25 @@ try:                                    # Windows console may not default to UTF
 except Exception:
     pass
 
-W, H = 520, 720
+W, H = 520, 720                       # logical (design) window size in px
+
+def _default_window_size():
+    """Default PHYSICAL window size: the logical W x H scaled by the primary
+    monitor's DPI. GLFW windows are sized in physical pixels, so on a 4K/250%
+    display the old fixed 520x720 default rendered the pet ~2.5x smaller than
+    intended. Scaling by the content scale keeps the pet a consistent size on
+    any DPI (and much bigger on 4K/250% displays). Clamped to the workarea
+    with a small margin so it never runs off-screen."""
+    glfw.init()
+    mon = glfw.get_primary_monitor()
+    sx, _ = glfw.get_monitor_content_scale(mon)
+    s = max(1.0, sx)                  # logical px -> physical px
+    w, h = int(round(W * s)), int(round(H * s))
+    _, _, mw, mh = glfw.get_monitor_workarea(mon)
+    w = min(w, max(200, mw - 80))
+    h = min(h, max(200, mh - 80))
+    return w, h
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_MODEL = os.path.join(
     HERE, "live2d-py", "Resources", "v3", "llny", "llny.model3.json")
@@ -629,13 +647,21 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default=DEFAULT_MODEL)
-    ap.add_argument("--width", type=int, default=W)
-    ap.add_argument("--height", type=int, default=H)
+    ap.add_argument("--width", type=int, default=None,
+                    help="window width in physical pixels (default: W=520 "
+                         "scaled by the monitor DPI, so the pet is a "
+                         "consistent size on high-DPI screens)")
+    ap.add_argument("--height", type=int, default=None,
+                    help="window height in physical pixels (default: H=720 "
+                         "scaled by the monitor DPI)")
     ap.add_argument("--x", type=int, default=None, help="window left (default top-right)")
     ap.add_argument("--y", type=int, default=None, help="window top (default top-right)")
     ap.add_argument("--scale", type=float, default=1.0,
-                    help="character scale (SetScale is absolute; 1.0 fits the "
-                         "window). +/-/0 keys resize it live.")
+                    help="character scale (1.0 = fitted to the window). Larger "
+                         "values zoom in, but the pet already fills the window "
+                         "height so the head clips as scale grows — enlarge the "
+                         "window (--width/--height) to show a physically bigger "
+                         "pet. +/-/0 keys resize it live.")
     ap.add_argument("--viewer", action="store_true",
                     help="Live2DViewer-style idle: regular blink + multi-axis "
                          "head/body sway drive the physics (hair/ears/bows "
@@ -672,6 +698,12 @@ def main():
     args = ap.parse_args()
 
     glfw.init()
+    if args.width is None or args.height is None:
+        dw, dh = _default_window_size()      # DPI-scaled default window
+        if args.width is None:
+            args.width = dw
+        if args.height is None:
+            args.height = dh
     win = LayeredWindow(args.width, args.height, args.x, args.y,
                         click_through=args.click_through)
     control_server = None

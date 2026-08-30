@@ -217,8 +217,8 @@ live2d.dispose()                 # 释放
 ```bash
 python desktop_pet.py                         # 默认加载 llny，右上角悬浮
 python desktop_pet.py --model /path/to/xxx.model3.json
-python desktop_pet.py --width 520 --height 720 --x 100 --y 100
-python desktop_pet.py --scale 0.6             # 初始人物大小（1.0 = 撑满窗口）
+python desktop_pet.py --width 800 --height 1200 --x 100 --y 100  # 指定窗口（物理像素）
+python desktop_pet.py --scale 0.6             # 人物缩放（1.0 = 撑满窗口；>1 会裁头顶）
 python desktop_pet.py --viewer                # 原生动态（接近 Live2DViewer 默认）
 python desktop_pet.py --emotion 开心          # 情绪模式：从该情绪开始
 python desktop_pet.py --emotion 兴奋 --lipsync /path/to/speech.wav --lipsync-device 0
@@ -230,7 +230,8 @@ python desktop_pet.py --self-test             # 只渲染一帧透明图并输�
 
 - **实现原理**：Windows 上 GLFW 的 `TRANSPARENT_FRAMEBUFFER` 只支持 macOS，所以用 Win32 **分层窗口**（`WS_EX_LAYERED`）——每帧把 GL 渲染结果（背景清成 `rgba(0,0,0,0)`）读回，预乘 alpha 后经 `UpdateLayeredWindow` 呈现，背景真正透明、人物边缘平滑。
 - **拖动**：**按住左键在人物身上拖动可移动位置**。命中检测用上一帧的 alpha 通道——只有按在人物可见像素上才触发拖动，透明区域点不到。
-- **缩放**：`--scale` 设初始大小；运行中按 **`+` / `-`** 实时放大/缩小、**`0`** 复位。缩放由 `model.SetScale()` 实现（绝对系数，围绕窗口中心，实测 1.0=撑满、2.0=两倍、0.5=一半）。
+- **窗口与人物大小**：默认窗口是逻辑 `520x720` 按显示器 DPI 缩放后的物理像素（本机 4K/250% 即 `1300x1800`），所以高 DPI 屏上人物不会再显得小；100% 缩放时仍是 `520x720`。想更大就调大窗口：`--width` / `--height`（物理像素），人物会等比变大且头顶不被裁。
+- **缩放**：`--scale` 设初始大小；运行中按 **`+` / `-`** 实时放大/缩小、**`0`** 复位。缩放由 `model.SetScale()` 实现（绝对系数，围绕窗口中心，实测 1.0=撑满、2.0=两倍、0.5=一半）。注意 `--scale` **没有上限**，但人物在 scale 1.0 时已占满窗口高度，再放大**头顶会裁掉**——所以要"更大的人物"优先加大窗口而不是调 scale。
 - **退出**：按 `ESC`（或 `Alt+F4`）。
 - 内置演示动画：去水印（Param14）+ 眨眼 + 说话 + 轻微摇头 + 外套缓慢穿脱。自测输出示例：`corner alpha mean = 0.000`（背景全透明）、`opaque px = 19%`（人物实体）。
 - **`--viewer` 待机模式（接近 Live2DViewer 默认）**：复刻 Live2DViewer 加载 llny 后的默认待机——Python 驱动**规律眨眼**（约每 2.8 秒一次）+ **多轴头/身体摆动**（ParamAngleX/Y/Z ±6~10°、ParamBodyAngleX/Y/Z），这些角度正是 `llny.physics3.json` 的物理输入；`model.Update()` 内部求值物理，把 84 个 ArtMesh 旋转参数（丸子头、束发、后发、草莓结等）带动 ±5~13°——这就是原版里"耳朵/头发会动"的机制。模型自带的孤儿 idle 运动 `motions/idel.motion3.json`（约 3 秒：呼吸 + 轻微肢体摆动）持续循环。比纯 SDK 自动模式（眨眼稀疏、摆动不可调）更接近原版。拖拽/缩放/退出按键与默认模式完全一致。
