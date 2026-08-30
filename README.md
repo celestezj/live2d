@@ -3,6 +3,14 @@
 > 使用说明文档。
 > 适用平台：**Windows x64**，Python 3.10–3.14（示例环境：conda 环境 + Python 3.10.16）。
 
+<div align="center">
+
+**效果展示**：透明桌面宠物（16 种表情 + 音频对口型 + 鼠标交互）
+
+<video src="demo.mp4" width="640" controls></video>
+
+</div>
+
 ---
 
 ## 一、这个项目是什么
