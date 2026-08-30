@@ -583,8 +583,12 @@ HEAD_ZONE = 0.40                  # canvas fraction: grab point below this (in t
 HEAD_TURN_AMP = 25.0              # head turns toward the drag (ParamAngleX, yaw)
 HEAD_TUG_AMP = 20.0               # head looks up/down with the drag (ParamAngleY, pitch)
 BODY_TURN_AMP = 15.0              # head leads the body turn toward the drag (ParamAngleX)
-BODY_LEAN_AMP = 5.0               # torso leans along the turn (ParamBodyAngleZ, - = toward drag)
-BODY_TUG_AMP = 5.0                # body leans fwd/back with a vertical drag (ParamBodyAngleX)
+BODY_YAW_AMP = 10.0               # torso turns toward the drag (ParamBodyAngleX — the
+                                  # real body-turn param, probed: chest sweeps sideways
+                                  # while the feet stay anchored; llny names are swapped
+                                  # vs Cubism, X=twist not lean). Full drag = full range.
+BODY_TUG_AMP = 5.0                # vertical body drag: crouch / stretch (ParamBodyAngleY,
+                                  # probed: + = lower/shorter, - = taller)
 LEG_ZONE = 0.55                   # canvas fraction: grab point at/above this (in
                                   # the model's own height) is the legs (covers the
                                   # thigh root, not just the knees)
@@ -636,11 +640,11 @@ def _apply_tug(model, valid, tug, zone="body"):
     - head zone: a horizontal pull turns the head toward it (ParamAngleX —
       llny's AX is the yaw axis, + = toward the viewer's right), a vertical pull
       looks the head up/down (ParamAngleY, + = look up);
-    - body zone: a horizontal pull turns the body toward it. llny has no torso
-      yaw (ParamBodyAngleY is a vertical stretch), so the head leads the turn
-      (ParamAngleX) and the torso leans along it (ParamBodyAngleZ, so the
-      shoulders shift toward the drag while the feet stay anchored); a vertical
-      pull leans the body forward/back (ParamBodyAngleX).
+    - body zone: a horizontal pull turns the body toward it — the head leads
+      (ParamAngleX) and the torso twists along it (ParamBodyAngleX, probed: the
+      chest sweeps sideways while the feet stay anchored; llny's body-angle
+      names are swapped vs Cubism, so X is the twist, not the lean); a vertical
+      pull crouches / stretches her (ParamBodyAngleY, + = lower).
     - legs zone: any pull makes her shy — a slight squat (ParamBodyAngleY -),
       the thighs squeezed together (Param28 "yy" goes negative, probed: it closes
       the two leg columns, unlike Param27 which is a whole-body turn), the arms
@@ -682,13 +686,13 @@ def _apply_tug(model, valid, tug, zone="body"):
             _add_param_delta(model, "ParamAngleY", -SHY_LOOKDOWN * s)
         if "ParamMouthForm" in valid:           # soft bashful smile
             _add_param_delta(model, "ParamMouthForm", SHY_MOUTH * s)
-    else:                                       # body: turn, head leads + lean
+    else:                                       # body: head + torso turn together
         if tx and "ParamAngleX" in valid:
             _add_param_delta(model, "ParamAngleX", tx * BODY_TURN_AMP)
-        if tx and "ParamBodyAngleZ" in valid:
-            _add_param_delta(model, "ParamBodyAngleZ", -tx * BODY_LEAN_AMP)
-        if ty and "ParamBodyAngleX" in valid:
-            _add_param_delta(model, "ParamBodyAngleX", -ty * BODY_TUG_AMP)
+        if tx and "ParamBodyAngleX" in valid:
+            _add_param_delta(model, "ParamBodyAngleX", tx * BODY_YAW_AMP)
+        if ty and "ParamBodyAngleY" in valid:
+            _add_param_delta(model, "ParamBodyAngleY", ty * BODY_TUG_AMP)
 
 
 def express_frame(win, model, f, control, idle_motion, state, clothes=None,
