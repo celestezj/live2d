@@ -1,0 +1,3 @@
+[submodule "live2d-py"]
+	path = live2d-py
+	url = git@celestezj:EasyLive2D/live2d-py.git

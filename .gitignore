@@ -1,0 +1,14 @@
+# Live2D 官方 SDK（许可限制、可重新下载，不纳入版本管理）
+CubismSdkForNative-5-r.5.zip
+
+# 渲染输出产物
+verify_v3.png
+*.png
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
