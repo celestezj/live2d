@@ -260,19 +260,20 @@ class LayeredWindow:
             dbl = ((now - t0) < 0.5 and p0 is not None
                    and abs(x - p0[0]) < 24 and abs(y - p0[1]) < 24)
             self._last_click["L"] = ((0.0, None) if dbl else (now, (x, y)))
-            if dbl and self._zone_y(DBL_ZONE_TOP) <= y < self._zone_y(DBL_ZONE_BOTTOM):
-                self._drag = None                 # double-click on the skirt /
-                self._tug_anchor = None           # private area or the thighs
-                self.tug_zone = "legs"            # (a band that tracks the scaled
-                self.tug = SHY_IMPULSE            # character, so it stays put
-                self.tug_target = SHY_IMPULSE     # whatever the scale; the chest
-                                                  # above and the calves below
-                                                  # don't count): the same shy +
-                                                  # legs-together as a thigh
-                                                  # drag, but instant — holds
-                                                  # while pressed, then eases
-                                                  # out on release (tug_zone
-                                                  # stays frozen in the decay)
+            if dbl and self.locked and self._zone_y(DBL_ZONE_TOP) <= y < self._zone_y(DBL_ZONE_BOTTOM):
+                self._drag = None                 # while locked, double-click on
+                self._tug_anchor = None           # the skirt / private area or
+                self.tug_zone = "legs"            # the thighs (a band that tracks
+                self.tug = SHY_IMPULSE            # the scaled character, so it
+                self.tug_target = SHY_IMPULSE     # stays put whatever the scale;
+                                                  # the chest above and the calves
+                                                  # below don't count): the same
+                                                  # shy + legs-together as a
+                                                  # thigh drag, but instant —
+                                                  # holds while pressed, then
+                                                  # eases out on release
+                                                  # (tug_zone stays frozen in
+                                                  # the decay)
                 return
             if self.locked:
                 self._tug_anchor = (x, y)    # locked: tug the pet in place
