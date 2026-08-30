@@ -201,6 +201,10 @@ class LayeredWindow:
         self.clothes_cb = None                    # called on right-double-click (jacket)
         self.lock_cb = None                       # called on left-double-click (position)
         self.locked = False                       # left-double-click toggles: locked = no drag
+        self.tug = (0.0, 0.0)                     # applied tug, smoothed toward tug_target
+        self.tug_target = (0.0, 0.0)              # mouse writes this while tugging (locked)
+        self._tug_anchor = None                   # (x, y) where the tug press started
+        self.tug_zone = "body"                    # "head" | "body" (from the grab point)
         glfw.set_mouse_button_callback(self.window, self._on_mouse_button)
         glfw.set_cursor_pos_callback(self.window, self._on_cursor_pos)
 
@@ -231,11 +235,17 @@ class LayeredWindow:
             if not self._hit_character(x, y):
                 return                       # ignore clicks on transparent pixels
             if self.locked:
-                return                       # position locked: dragging disabled
+                self._tug_anchor = (x, y)    # locked: tug the pet in place
+                self.tug_zone = ("head" if y < self.h * HEAD_ZONE else "body")
+                self.tug_target = (0.0, 0.0)
+                return
             wx, wy = glfw.get_window_pos(window)
             self._drag = (wx, wy, x, y)
         elif button == glfw.MOUSE_BUTTON_LEFT and action == glfw.RELEASE:
             self._drag = None
+            self._tug_anchor = None          # release: pet returns to normal pose
+            self.tug_zone = "body"
+            self.tug_target = (0.0, 0.0)
 
     def _maybe_double_click(self, key, x, y, on_double):
         """A second click on the character within ~0.5s (and <24px from the
@@ -263,6 +273,12 @@ class LayeredWindow:
             self.lock_cb(self.locked)
 
     def _on_cursor_pos(self, window, x, y):
+        if self._tug_anchor is not None:         # locked: react to the pull
+            x0, y0 = self._tug_anchor
+            # a ~15% width / 12% height drag already reaches the full reaction
+            tx = max(-1.0, min(1.0, (x - x0) / (self.w * 0.15)))
+            ty = max(-1.0, min(1.0, (y - y0) / (self.h * 0.12)))
+            self.tug_target = (tx, ty)
         if self._drag is None:
             return
         _, _, cx0, cy0 = self._drag              # grab offset inside the window
@@ -484,7 +500,61 @@ def new_emotion_state(model, emotion):
             "mouth_cur": pose.get("ParamMouthOpenY", 0.0)}
 
 
-def express_frame(win, model, f, control, idle_motion, state, clothes=None):
+# Tug amplitudes (deg). Yaw/pitch ranges: head ±30, body ±10. llny's angle rig
+# is unlabelled: AX is the yaw axis, AY the pitch axis (probed and confirmed
+# against live drags and the model's own PRPRLive mapping). It also has NO torso
+# yaw — ParamBodyAngleY is a vertical stretch (hgt 705 vs 678 at ±10) and
+# ParamBodyAngleZ leans the upper body while the hips counter-swing. So a body
+# tug is faked as the head leading the turn plus a slight lean along it.
+HEAD_ZONE = 0.40                  # anchor y < 40% of window height = grabbed the head
+HEAD_TURN_AMP = 25.0              # head turns toward the drag (ParamAngleX, yaw)
+HEAD_TUG_AMP = 20.0               # head looks up/down with the drag (ParamAngleY, pitch)
+BODY_TURN_AMP = 15.0              # head leads the body turn toward the drag (ParamAngleX)
+BODY_LEAN_AMP = 5.0               # torso leans along the turn (ParamBodyAngleZ, - = toward drag)
+BODY_TUG_AMP = 5.0                # body leans fwd/back with a vertical drag (ParamBodyAngleX)
+
+
+def _add_param_delta(model, pid, delta):
+    """Add delta to a model parameter (guarded; skips missing params)."""
+    try:
+        idx = model.GetParamIds().index(pid)
+    except ValueError:
+        return
+    model.SetParameterValue(pid, model.GetParameterValue(idx) + delta)
+
+
+def _apply_tug(model, valid, tug, zone="body"):
+    """React to a mouse tug while the pet's position is locked. Where you grab
+    decides what responds:
+    - head zone: a horizontal pull turns the head toward it (ParamAngleX —
+      llny's AX is the yaw axis, + = toward the viewer's right), a vertical pull
+      looks the head up/down (ParamAngleY, + = look up);
+    - body zone: a horizontal pull turns the body toward it. llny has no torso
+      yaw (ParamBodyAngleY is a vertical stretch), so the head leads the turn
+      (ParamAngleX) and the torso leans along it (ParamBodyAngleZ, so the
+      shoulders shift toward the drag while the feet stay anchored); a vertical
+      pull leans the body forward/back (ParamBodyAngleX).
+    Values are additive on top of the pose; the main loop decays `tug` to
+    (0,0) on release so the pet returns to its normal pose."""
+    if not valid or not tug or not any(tug):
+        return
+    tx, ty = tug
+    if zone == "head":
+        if tx and "ParamAngleX" in valid:
+            _add_param_delta(model, "ParamAngleX", tx * HEAD_TURN_AMP)
+        if ty and "ParamAngleY" in valid:
+            _add_param_delta(model, "ParamAngleY", -ty * HEAD_TUG_AMP)
+    else:                                       # body: turn, head leads + lean
+        if tx and "ParamAngleX" in valid:
+            _add_param_delta(model, "ParamAngleX", tx * BODY_TURN_AMP)
+        if tx and "ParamBodyAngleZ" in valid:
+            _add_param_delta(model, "ParamBodyAngleZ", -tx * BODY_LEAN_AMP)
+        if ty and "ParamBodyAngleX" in valid:
+            _add_param_delta(model, "ParamBodyAngleX", -ty * BODY_TUG_AMP)
+
+
+def express_frame(win, model, f, control, idle_motion, state, clothes=None,
+                  tug=None, tug_zone="body"):
     """One frame of express mode: an emotion pose (cross-faded over ~15 frames)
     plus the viewer-style blink and sway, and a mouth that follows the WAV's
     RMS energy scaled by MOUTH_AMP while playing (otherwise the pose's own
@@ -550,6 +620,7 @@ def express_frame(win, model, f, control, idle_motion, state, clothes=None):
         model.StartMotion("Idle", 0, priority=1)
     if clothes is not None and "Param2" in valid:
         model.SetParameterValue("Param2", clothes)   # right-dbl-click jacket toggle
+    _apply_tug(model, valid, tug, tug_zone)          # locked-drag reaction
     model.Update()
     live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)       # fully transparent background
     GL.glEnable(GL.GL_BLEND)
@@ -559,10 +630,13 @@ def express_frame(win, model, f, control, idle_motion, state, clothes=None):
     glfw.poll_events()
 
 
-def render_frame(win, model, f, present_lookup, clothes=None):
+def render_frame(win, model, f, present_lookup, clothes=None, tug=None, valid=None,
+                 tug_zone="body"):
     """Drive one animation frame; returns the alpha channel (HxW uint8).
     clothes: None = keep the demo's auto coat on/off, 0..1 = forced jacket
-    level (right-double-click toggles it)."""
+    level (right-double-click toggles it). tug: (tx, ty) mouse-pull reaction
+    while locked, with tug_zone "head"/"body" choosing the reacting part
+    (for _apply_tug); valid: the model's parameter ids."""
     blink_frames = [{"ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0},
                     {"ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0},
                     {"ParamEyeLOpen": 0.05, "ParamEyeROpen": 0.05},
@@ -586,6 +660,7 @@ def render_frame(win, model, f, present_lookup, clothes=None):
         else:
             model.SetParameterValue("Param2", clothes)
 
+    _apply_tug(model, valid, tug, tug_zone)      # locked-drag reaction
     model.Update()
     live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)       # fully transparent background
     GL.glEnable(GL.GL_BLEND)
@@ -611,7 +686,8 @@ def find_idle_motion(model_json):
     return None
 
 
-def viewer_frame(win, model, f, idle_motion=None, clothes=None, present_lookup=None):
+def viewer_frame(win, model, f, idle_motion=None, clothes=None, tug=None,
+                 valid=None, present_lookup=None, tug_zone="body"):
     """One frame of the Live2DViewer-style idle.
 
     A regular blink plus a gentle multi-axis head/body sway are written from
@@ -646,6 +722,7 @@ def viewer_frame(win, model, f, idle_motion=None, clothes=None, present_lookup=N
         model.StartMotion("Idle", 0, priority=1)
     if clothes is not None and present_lookup is not None and "Param2" in present_lookup:
         model.SetParameterValue("Param2", clothes)   # right-dbl-click jacket toggle
+    _apply_tug(model, valid, tug, tug_zone)          # locked-drag reaction
     model.Update()
     live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)       # fully transparent background
     GL.glEnable(GL.GL_BLEND)
@@ -786,6 +863,8 @@ def main():
         present_lookup = param_lookup(model, ["Param14", "Param2"])
         if "Param14" in present_lookup:          # llny: remove watermark
             model.SetParameterValue("Param14", 1.0)
+        model_ids = {model.GetParameter(i).id
+                     for i in range(model.GetParameterCount())}
 
         # express mode: emotion poses + optional lipsync/TCP on top of the
         # viewer-style idle
@@ -819,12 +898,15 @@ def main():
                 print("no idle motion found; blink/sway/physics only")
 
         if express:
-            express_frame(win, model, 0, control, idle_motion, estate, clothes=1.0)
+            express_frame(win, model, 0, control, idle_motion, estate, clothes=1.0,
+                          tug=(0.0, 0.0))
         elif args.viewer:
             viewer_frame(win, model, 0, idle_motion, clothes=1.0,
-                         present_lookup=present_lookup)
+                         present_lookup=present_lookup, tug=(0.0, 0.0),
+                         valid=model_ids)
         else:
-            render_frame(win, model, 0, present_lookup)   # clothes None = auto sway
+            render_frame(win, model, 0, present_lookup,   # clothes None = auto sway
+                         tug=(0.0, 0.0), valid=model_ids)
 
         if args.self_test:
             raw = win.last_rgba
@@ -871,7 +953,9 @@ def main():
 
         print("transparent pet running — press ESC to quit, +/- to resize, "
               "0 to reset; left-DOUBLE-click to lock/unlock position, "
-              "right-DOUBLE-click to take the jacket off/on (Alt+F4 works too)")
+              "right-DOUBLE-click to take the jacket off/on; while locked, "
+              "drag the head to turn/nod it, drag the body to turn it "
+              "(Alt+F4 works too)")
         f = 0
         prev_keys = {}
         clothes_level = 1.0               # animated jacket level (0 = off, 1 = on)
@@ -912,14 +996,24 @@ def main():
                 clothes_level += (target - clothes_level) * 0.06
                 clothes_value = clothes_level
 
+            # locked-drag tug: ease the pose toward the mouse pull while held,
+            # decay back to (0,0) as soon as the button is released
+            t, tt = win.tug, win.tug_target
+            win.tug = (t[0] + (tt[0] - t[0]) * 0.15,
+                       t[1] + (tt[1] - t[1]) * 0.15)
+
             if express:
                 express_frame(win, model, f, control, idle_motion, estate,
-                              clothes=clothes_value)
+                              clothes=clothes_value, tug=win.tug,
+                              tug_zone=win.tug_zone)
             elif args.viewer:
                 viewer_frame(win, model, f, idle_motion, clothes=clothes_value,
-                             present_lookup=present_lookup)
+                             present_lookup=present_lookup, tug=win.tug,
+                             valid=model_ids, tug_zone=win.tug_zone)
             else:
-                render_frame(win, model, f, present_lookup, clothes=clothes_value)
+                render_frame(win, model, f, present_lookup, clothes=clothes_value,
+                             tug=win.tug, valid=model_ids,
+                             tug_zone=win.tug_zone)
             f += 1
     finally:
         if control_server is not None:
