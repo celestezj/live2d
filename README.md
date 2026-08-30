@@ -219,6 +219,7 @@ python desktop_pet.py                         # 默认加载 llny，右上角悬
 python desktop_pet.py --model /path/to/xxx.model3.json
 python desktop_pet.py --width 520 --height 720 --x 100 --y 100
 python desktop_pet.py --scale 0.6             # 初始人物大小（1.0 = 撑满窗口）
+python desktop_pet.py --viewer                # 原生动态（接近 Live2DViewer 默认）
 python desktop_pet.py --self-test             # 只渲染一帧透明图并输出 alpha 统计
 ```
 
@@ -227,6 +228,7 @@ python desktop_pet.py --self-test             # 只渲染一帧透明图并输�
 - **缩放**：`--scale` 设初始大小；运行中按 **`+` / `-`** 实时放大/缩小、**`0`** 复位。缩放由 `model.SetScale()` 实现（绝对系数，围绕窗口中心，实测 1.0=撑满、2.0=两倍、0.5=一半）。
 - **退出**：按 `ESC`（或 `Alt+F4`）。
 - 内置演示动画：去水印（Param14）+ 眨眼 + 说话 + 轻微摇头 + 外套缓慢穿脱。自测输出示例：`corner alpha mean = 0.000`（背景全透明）、`opaque px = 19%`（人物实体）。
+- **`--viewer` 待机模式（接近 Live2DViewer 默认）**：复刻 Live2DViewer 加载 llny 后的默认待机——Python 驱动**规律眨眼**（约每 2.8 秒一次）+ **多轴头/身体摆动**（ParamAngleX/Y/Z ±6~10°、ParamBodyAngleX/Y/Z），这些角度正是 `llny.physics3.json` 的物理输入；`model.Update()` 内部求值物理，把 84 个 ArtMesh 旋转参数（丸子头、束发、后发、草莓结等）带动 ±5~13°——这就是原版里"耳朵/头发会动"的机制。模型自带的孤儿 idle 运动 `motions/idel.motion3.json`（约 3 秒：呼吸 + 轻微肢体摆动）持续循环。比纯 SDK 自动模式（眨眼稀疏、摆动不可调）更接近原版。拖拽/缩放/退出按键与默认模式完全一致。
 
 ---
 

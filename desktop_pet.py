@@ -7,9 +7,17 @@ head sway + coat on/off). Press ESC (or Alt+F4) to quit. Drag with the left
 mouse button (pressing on a visible pixel of the character) to move it around.
 Resize the character live with the + / - keys (0 resets to --scale).
 
+--viewer mode reproduces the idle Live2DViewer shows by default for llny:
+regular blinking plus a multi-axis head/body sway drive the model's physics, so
+the hair/ear/bow meshes visibly swing (physics3.json feeds 84 ArtMesh-rotation
+params from head/body angles), and the model's own idle motion keeps looping
+(the orphan motions/idel.motion3.json: breath + subtle body sway). The
+procedural demo animation (talk + coat on/off) is skipped.
+
 Usage:
   python desktop_pet.py [--model /path/to/model.model3.json]
                         [--width 520 --height 720] [--x 0 --y 0] [--scale 1.0]
+                        [--viewer]           # SDK-native dynamics (see above)
                         [--self-test]        # one transparent frame + alpha stats
 
 Note: GLFW_TRANSPARENT_FRAMEBUFFER is macOS-only, so on Windows we render to the
@@ -284,6 +292,61 @@ def render_frame(win, model, f, present_lookup):
     glfw.poll_events()
 
 
+def find_idle_motion(model_json):
+    """Locate a motion to loop in --viewer mode (llny: motions/idel.motion3.json).
+    Returns None if the model ships no motions/ directory."""
+    d = os.path.dirname(os.path.abspath(model_json))
+    motions_dir = os.path.join(d, "motions")
+    if not os.path.isdir(motions_dir):
+        return None
+    preferred = os.path.join(motions_dir, "idel.motion3.json")
+    if os.path.exists(preferred):
+        return preferred
+    for name in sorted(os.listdir(motions_dir)):
+        if name.endswith(".motion3.json"):
+            return os.path.join(motions_dir, name)
+    return None
+
+
+def viewer_frame(win, model, f, idle_motion=None):
+    """One frame of the Live2DViewer-style idle.
+
+    A regular blink plus a gentle multi-axis head/body sway are written from
+    Python (Live2DViewer drives its idle the same way); physics, evaluated
+    inside model.Update(), then swings the hair/ear/bow ArtMeshes — that is
+    what makes the ears/hair visibly move. The model's own idle motion loops
+    underneath (llny's motions/idel.motion3.json: 3s breath + subtle body).
+    """
+    # blink: eyes closed to 0.05 and open again, every ~2.8 s
+    blink_dur, blink_len = 170, 12
+    k = f % blink_dur
+    if k < blink_len:
+        t = k / blink_len
+        eye = 1.0 - 0.95 * (2 * t if t < 0.5 else 2 * (1 - t))
+    else:
+        eye = 1.0
+    model.SetParameterValue("ParamEyeLOpen", eye)
+    model.SetParameterValue("ParamEyeROpen", eye)
+
+    # multi-axis sway — the physics inputs that drive hair/ear movement
+    model.SetParameterValue("ParamAngleX", 10.0 * math.sin(f * 0.040))
+    model.SetParameterValue("ParamAngleY", 8.0 * math.sin(f * 0.027 + 1.3))
+    model.SetParameterValue("ParamAngleZ", 6.0 * math.sin(f * 0.050 + 2.1))
+    model.SetParameterValue("ParamBodyAngleX", 4.0 * math.sin(f * 0.030 + 0.5))
+    model.SetParameterValue("ParamBodyAngleY", 3.0 * math.sin(f * 0.024 + 2.0))
+    model.SetParameterValue("ParamBodyAngleZ", 1.5 * math.sin(f * 0.035 + 3.0))
+
+    if idle_motion is not None and model.IsMotionFinished():
+        model.StartMotion("Idle", 0, priority=1)
+    model.Update()
+    live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)       # fully transparent background
+    GL.glEnable(GL.GL_BLEND)
+    model.Draw()
+    win.present()
+    glfw.swap_buffers(win.window)
+    glfw.poll_events()
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
@@ -299,6 +362,11 @@ def main():
     ap.add_argument("--scale", type=float, default=1.0,
                     help="character scale (SetScale is absolute; 1.0 fits the "
                          "window). +/-/0 keys resize it live.")
+    ap.add_argument("--viewer", action="store_true",
+                    help="Live2DViewer-style idle: regular blink + multi-axis "
+                         "head/body sway drive the physics (hair/ears/bows "
+                         "visibly swing) and the model's own idle motion loops, "
+                         "instead of the procedural demo animation")
     ap.add_argument("--click-through", action="store_true",
                     help="let mouse clicks pass through the window (ESC then "
                          "may not work; Alt+F4 or task manager to quit)")
@@ -315,7 +383,10 @@ def main():
         live2d.glInit()
         model = live2d.LAppModel()
         model.LoadModelJson(os.path.abspath(args.model))
-        # C++ SDK auto-blink/breath would overwrite our params; disable them.
+        # C++ SDK auto-blink/breath would overwrite our params; disable them
+        # in both modes. --viewer drives its own blink/sway (Live2DViewer's
+        # idle is procedural too) and relies on model.Update() only for the
+        # motion, physics and expression layers.
         model.SetAutoBlinkEnable(False)
         model.SetAutoBreathEnable(False)
         model.Resize(args.width, args.height)
@@ -326,7 +397,22 @@ def main():
         if "Param14" in present_lookup:          # llny: remove watermark
             model.SetParameterValue("Param14", 1.0)
 
-        render_frame(win, model, 0, present_lookup)
+        idle_motion = None
+        if args.viewer:
+            idle_motion = find_idle_motion(args.model)
+            if idle_motion is not None:
+                model.LoadExtraMotion("Idle", idle_motion)
+                model.StartMotion("Idle", 0, priority=1)
+                print("viewer mode: looping idle motion "
+                      + os.path.basename(idle_motion))
+            else:
+                print("viewer mode: no idle motion found; "
+                      "auto blink/breath/physics/sway only")
+
+        if args.viewer:
+            viewer_frame(win, model, 0, idle_motion)
+        else:
+            render_frame(win, model, 0, present_lookup)
 
         if args.self_test:
             raw = win.last_rgba
@@ -374,7 +460,10 @@ def main():
                 model.SetScale(scale)
                 print(f"scale reset = {scale:.2f}")
 
-            render_frame(win, model, f, present_lookup)
+            if args.viewer:
+                viewer_frame(win, model, f, idle_motion)
+            else:
+                render_frame(win, model, f, present_lookup)
             f += 1
     finally:
         live2d.dispose()
