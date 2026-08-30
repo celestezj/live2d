@@ -9,6 +9,9 @@ Live2DViewer/
 verify_v3.png
 *.png
 
+# 参数表导出（用 model_api.py --out 随时可重新生成）
+llny_params.txt
+
 # Python 缓存
 __pycache__/
 *.pyc
