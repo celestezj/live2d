@@ -210,6 +210,21 @@ live2d.clearBuffer(r, g, b, a)   # 清屏
 live2d.dispose()                 # 释放
 ```
 
+### 4.4 透明悬浮窗（桌宠）
+
+把人物渲染成**透明背景、无边框、置顶**的悬浮窗口，桌面上只看到角色在动（类似桌宠）：
+
+```bash
+python desktop_pet.py                         # 默认加载 llny，右上角悬浮
+python desktop_pet.py --model /path/to/xxx.model3.json
+python desktop_pet.py --width 520 --height 720 --x 100 --y 100
+python desktop_pet.py --self-test             # 只渲染一帧透明图并输出 alpha 统计
+```
+
+- **实现原理**：Windows 上 GLFW 的 `TRANSPARENT_FRAMEBUFFER` 只支持 macOS，所以用 Win32 **分层窗口**（`WS_EX_LAYERED`）——每帧把 GL 渲染结果（背景清成 `rgba(0,0,0,0)`）读回，预乘 alpha 后经 `UpdateLayeredWindow` 呈现，背景真正透明、人物边缘平滑。
+- **退出**：按 `ESC`（或 `Alt+F4`）。
+- 内置演示动画：去水印（Param14）+ 眨眼 + 说话 + 轻微摇头 + 外套缓慢穿脱。自测输出示例：`corner alpha mean = 0.000`（背景全透明）、`opaque px = 19%`（人物实体）。
+
 ---
 
 ## 五、参数控制原理
