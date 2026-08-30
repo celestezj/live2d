@@ -218,10 +218,13 @@ live2d.dispose()                 # 释放
 python desktop_pet.py                         # 默认加载 llny，右上角悬浮
 python desktop_pet.py --model /path/to/xxx.model3.json
 python desktop_pet.py --width 520 --height 720 --x 100 --y 100
+python desktop_pet.py --scale 0.6             # 初始人物大小（1.0 = 撑满窗口）
 python desktop_pet.py --self-test             # 只渲染一帧透明图并输出 alpha 统计
 ```
 
 - **实现原理**：Windows 上 GLFW 的 `TRANSPARENT_FRAMEBUFFER` 只支持 macOS，所以用 Win32 **分层窗口**（`WS_EX_LAYERED`）——每帧把 GL 渲染结果（背景清成 `rgba(0,0,0,0)`）读回，预乘 alpha 后经 `UpdateLayeredWindow` 呈现，背景真正透明、人物边缘平滑。
+- **拖动**：**按住左键在人物身上拖动可移动位置**。命中检测用上一帧的 alpha 通道——只有按在人物可见像素上才触发拖动，透明区域点不到。
+- **缩放**：`--scale` 设初始大小；运行中按 **`+` / `-`** 实时放大/缩小、**`0`** 复位。缩放由 `model.SetScale()` 实现（绝对系数，围绕窗口中心，实测 1.0=撑满、2.0=两倍、0.5=一半）。
 - **退出**：按 `ESC`（或 `Alt+F4`）。
 - 内置演示动画：去水印（Param14）+ 眨眼 + 说话 + 轻微摇头 + 外套缓慢穿脱。自测输出示例：`corner alpha mean = 0.000`（背景全透明）、`opaque px = 19%`（人物实体）。
 

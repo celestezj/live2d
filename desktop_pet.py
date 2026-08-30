@@ -5,10 +5,11 @@ fully transparent (per-pixel alpha via a Win32 layered window), no window chrome
 The character plays a looping demo animation (watermark off + blink + talk +
 head sway + coat on/off). Press ESC (or Alt+F4) to quit. Drag with the left
 mouse button (pressing on a visible pixel of the character) to move it around.
+Resize the character live with the + / - keys (0 resets to --scale).
 
 Usage:
   python desktop_pet.py [--model /path/to/model.model3.json]
-                        [--width 520 --height 720] [--x 0 --y 0]
+                        [--width 520 --height 720] [--x 0 --y 0] [--scale 1.0]
                         [--self-test]        # one transparent frame + alpha stats
 
 Note: GLFW_TRANSPARENT_FRAMEBUFFER is macOS-only, so on Windows we render to the
@@ -295,6 +296,9 @@ def main():
     ap.add_argument("--height", type=int, default=H)
     ap.add_argument("--x", type=int, default=None, help="window left (default top-right)")
     ap.add_argument("--y", type=int, default=None, help="window top (default top-right)")
+    ap.add_argument("--scale", type=float, default=1.0,
+                    help="character scale (SetScale is absolute; 1.0 fits the "
+                         "window). +/-/0 keys resize it live.")
     ap.add_argument("--click-through", action="store_true",
                     help="let mouse clicks pass through the window (ESC then "
                          "may not work; Alt+F4 or task manager to quit)")
@@ -315,6 +319,8 @@ def main():
         model.SetAutoBlinkEnable(False)
         model.SetAutoBreathEnable(False)
         model.Resize(args.width, args.height)
+        scale = args.scale                       # absolute factor (scale ~= fit window)
+        model.SetScale(scale)
 
         present_lookup = param_lookup(model, ["Param14", "Param2"])
         if "Param14" in present_lookup:          # llny: remove watermark
@@ -337,12 +343,37 @@ def main():
             print("saved pet_preview.png")
             return
 
-        print("transparent pet running — press ESC to quit (Alt+F4 works too)")
+        print("transparent pet running — press ESC to quit, +/- to resize, "
+              "0 to reset (Alt+F4 works too)")
         f = 0
+        prev_keys = {}
         while True:
             if glfw.window_should_close(win.window) or \
                glfw.get_key(win.window, glfw.KEY_ESCAPE) == glfw.PRESS:
                 break
+
+            # live resize: edge-triggered + / - / 0 (window needs focus first)
+            pressed = {}
+            for key in (glfw.KEY_EQUAL, glfw.KEY_KP_ADD, glfw.KEY_MINUS,
+                        glfw.KEY_KP_SUBTRACT, glfw.KEY_0):
+                now = glfw.get_key(win.window, key) == glfw.PRESS
+                pressed[key] = now and not prev_keys.get(key, False)
+            prev_keys = {k: glfw.get_key(win.window, k) == glfw.PRESS
+                         for k in (glfw.KEY_EQUAL, glfw.KEY_KP_ADD,
+                                   glfw.KEY_MINUS, glfw.KEY_KP_SUBTRACT, glfw.KEY_0)}
+            if pressed.get(glfw.KEY_EQUAL) or pressed.get(glfw.KEY_KP_ADD):
+                scale = min(10.0, scale * 1.15)
+                model.SetScale(scale)
+                print(f"scale = {scale:.2f}")
+            if pressed.get(glfw.KEY_MINUS) or pressed.get(glfw.KEY_KP_SUBTRACT):
+                scale = max(0.1, scale / 1.15)
+                model.SetScale(scale)
+                print(f"scale = {scale:.2f}")
+            if pressed.get(glfw.KEY_0):
+                scale = args.scale
+                model.SetScale(scale)
+                print(f"scale reset = {scale:.2f}")
+
             render_frame(win, model, f, present_lookup)
             f += 1
     finally:
