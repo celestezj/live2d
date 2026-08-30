@@ -260,18 +260,19 @@ class LayeredWindow:
             dbl = ((now - t0) < 0.5 and p0 is not None
                    and abs(x - p0[0]) < 24 and abs(y - p0[1]) < 24)
             self._last_click["L"] = ((0.0, None) if dbl else (now, (x, y)))
-            if dbl and y >= self._zone_y(LEG_ZONE):  # double-click on the legs
-                self._drag = None                 # area (thighs and below; the
-                self._tug_anchor = None           # boundary tracks the scaled
-                self.tug_zone = "legs"            # character, so the zone stays
-                self.tug = SHY_IMPULSE            # put whatever the scale — the
-                self.tug_target = SHY_IMPULSE     # chest/private area don't
-                                                  # count): the same shy + legs-
-                                                  # together as a thigh drag, but
-                                                  # instant — holds while pressed,
-                                                  # then eases out on release
-                                                  # (tug_zone stays frozen in
-                                                  # the decay)
+            if dbl and self._zone_y(DBL_ZONE_TOP) <= y < self._zone_y(DBL_ZONE_BOTTOM):
+                self._drag = None                 # double-click on the skirt /
+                self._tug_anchor = None           # private area or the thighs
+                self.tug_zone = "legs"            # (a band that tracks the scaled
+                self.tug = SHY_IMPULSE            # character, so it stays put
+                self.tug_target = SHY_IMPULSE     # whatever the scale; the chest
+                                                  # above and the calves below
+                                                  # don't count): the same shy +
+                                                  # legs-together as a thigh
+                                                  # drag, but instant — holds
+                                                  # while pressed, then eases
+                                                  # out on release (tug_zone
+                                                  # stays frozen in the decay)
                 return
             if self.locked:
                 self._tug_anchor = (x, y)    # locked: tug the pet in place
@@ -584,8 +585,14 @@ BODY_LEAN_AMP = 5.0               # torso leans along the turn (ParamBodyAngleZ,
 BODY_TUG_AMP = 5.0                # body leans fwd/back with a vertical drag (ParamBodyAngleX)
 LEG_ZONE = 0.55                   # canvas fraction: grab point at/above this (in
                                   # the model's own height) is the legs (covers the
-                                  # thigh root, not just the knees). Also the
-                                  # left-double-click shy-trigger boundary
+                                  # thigh root, not just the knees)
+DBL_ZONE_TOP = 0.45               # canvas fraction: the left-double-click shy band
+                                  # starts here — the skirt / private area just
+                                  # below the chest (probed: chest ends ~0.53;
+                                  # nudged up 2% per user, x4)
+DBL_ZONE_BOTTOM = 0.67            # ... and ends just above the calves / knee
+                                  # (probed: the leg tapers sharply from ~0.76;
+                                  # calves and below don't trigger)
 LEG_CLOSE_AMP = 9.0               # Param28 "yy": probed — negative squeezes the legs
                                   # together (the two leg columns visibly merge)
 SHY_SQUAT_AMP = 7.0               # ParamBodyAngleY -: whole body lowers a touch
@@ -601,12 +608,12 @@ SHY_GAZE_SIDE = 0.25              # averted gaze (probed: ParamEyeBallX + = righ
 SHY_LID = 0.25                    # half-lidded bashful eyes (ParamEyeLOpen/R -)
 SHY_LOOKDOWN = 5.0                # head pitches down a touch (ParamAngleY -)
 SHY_MOUTH = 0.3                   # soft bashful smile (ParamMouthForm +)
-SHY_IMPULSE = (0.8, 0.6)          # left-double-click on the legs (thighs and
-                                  # below; in practice the chest/private area
-                                  # don't fire): a pull vector that ramps the
-                                  # legs-zone shy reaction to full (hypot = 1.0),
-                                  # holds while pressed, then eases out on
-                                  # release
+SHY_IMPULSE = (0.8, 0.6)          # left-double-click on the skirt / private area
+                                  # or the thighs (the DBL_ZONE band — the chest
+                                  # above and the calves below don't fire): a pull
+                                  # vector that ramps the legs-zone shy reaction
+                                  # to full (hypot = 1.0), holds while pressed,
+                                  # then eases out on release
 TUG_ATTACK_RATE = 0.15            # follow the mouse pull while held (per-frame)
 TUG_RELEASE_RATE = 0.07           # glide back to (0,0) on release: slower, so the
                                   # pose eases home instead of snapping
@@ -1086,8 +1093,7 @@ def main():
               "right-DOUBLE-click to take the jacket off/on; while locked, "
               "drag the head to turn/nod it, drag the body to turn it, drag "
               "the legs to make her shy (thighs together); double-click her "
-              "legs (thighs and below) to make her shy instantly "
-              "(Alt+F4 works too)")
+              "hips/thighs to make her shy instantly (Alt+F4 works too)")
         f = 0
         prev_keys = {}
         clothes_level = 1.0               # animated jacket level (0 = off, 1 = on)
