@@ -511,7 +511,7 @@ EMOTIONS = {
     "生气": {"ParamBrowLY": -0.4, "ParamBrowRY": -0.4, "ParamBrowLAngle": -0.5,
              "ParamBrowRAngle": 0.5, "ParamMouthForm": -0.3,
              "ParamEyeLOpen": 0.65, "ParamEyeROpen": 0.65, "ParamEyeBallY": -0.3,
-             "Param11": 1.0, "Param61": 1.0, "ParamAngleY": 10,
+             "Param11": 1.0, "Param61": 1.0, "ParamAngleY": 15,
              "ParamAngleX": 4, "ParamBodyAngleX": 4},
     "愤怒": {"ParamBrowLY": -0.45, "ParamBrowRY": -0.45, "ParamBrowLAngle": -0.5,
              "ParamBrowRAngle": 0.5, "ParamMouthForm": 0.4,
