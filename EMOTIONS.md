@@ -25,7 +25,7 @@
 | 13 | 担心 | 紧蹙上挑，大歪头 | 眉紧蹙 −0.5/0.5 + 挑 0.4、眼珠上、嘴微张、歪头 Z6 |
 | 14 | 不满 | 噘嘴深下垂，撇头 | **MouthForm −1.0 深垂**、眉压、半眯眼 0.75、歪头 + 偏头 |
 | 15 | 生气 | 仰头蔑视，揪嘴俯视 | **仰头 Y10**、眼珠下 0.3、眼窄 0.65、眉强压、**Shrug 1.0 揪嘴** |
-| 16 | 愤怒 | 怒吼张嘴，低首侧视 | 咧嘴 0.4、张嘴 0.45、Jaw 0.3、眉强压、头低 Y−5 |
+| 16 | 愤怒 | 低头瞪眼，咬牙切齿 | 头低 Y−18、眼珠上翻 0.9、眯眼 0.8、眉压 −0.7/±0.9、咬嘴 Form−0.75、歪头 Z−10 |
 
 ---
 
@@ -110,9 +110,9 @@
 - **配方**：`ParamBrowLY/RY -0.4, ParamBrowLAngle -0.5, ParamBrowRAngle 0.5, ParamMouthForm -0.3, ParamEyeLOpen/ROpen 0.65, ParamEyeBallY -0.3, Param11 1.0, Param61 1.0, ParamAngleY 10, ParamAngleX 4, ParamBodyAngleX 4`
 
 ### 16. 愤怒
-- **设计**：**怒吼**——咧嘴 MouthForm 0.4 + **张嘴 0.45 + Jaw 0.3**（嘴张到最大）+ 全开眼 + 眉强压内角 −0.5/0.5 + 生气 Param11 1.0 + **头低 Y−5**（怒吼前倾）+ 歪头 Z−4。
-- **配方**：`ParamBrowLY/RY -0.45, ParamBrowLAngle -0.5, ParamBrowRAngle 0.5, ParamMouthForm 0.4, ParamMouthOpenY 0.45, ParamEyeLOpen/ROpen 1.0, Param11 1.0, Param62 0.3, ParamAngleY -5, ParamAngleZ -4`
-- **与生气区别**：生气是"仰头蔑视 + 抿嘴揪起"；愤怒是"低首怒吼 + 张嘴咆哮"，且眼全开。
+- **设计**（2026-09-01 重写，用户逐轮加码后定稿）：**低头瞪眼，咬牙切齿**——头压到 **Y−18**（比怒吼版低 6px，眉眼带实测 y98→y104）、**眼珠上翻 0.9**（低头从下往上瞪）+ **眯眼 0.8**（眯缝瞪）+ 眉压 −0.7 且眉角 ±0.9、**嘴咬紧 MouthForm −0.75 + OpenY 0.06**（一条缝，不是咆哮；说话时 MOUTH_AMP 1.3 仍会张开吼）+ 生气 Param11 1.0 + 歪头 Z−10。删掉 Jaw 张开。
+- **配方**：`ParamBrowLY/RY -0.7, ParamBrowLAngle -0.9, ParamBrowRAngle 0.9, ParamMouthForm -0.75, ParamMouthOpenY 0.06, ParamEyeLOpen/ROpen 0.8, ParamEyeBallY 0.9, Param11 1.0, ParamAngleY -18, ParamAngleZ -10`
+- **与生气区别**：生气是"仰头蔑视 AngleY +15 + 抿嘴揪起"；愤怒是"低头 Y−18 + 眼珠上翻瞪 + 咬牙"，头一个仰一个垂，分界线很清楚。
 
 ---
 

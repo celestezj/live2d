@@ -513,11 +513,11 @@ EMOTIONS = {
              "ParamEyeLOpen": 0.65, "ParamEyeROpen": 0.65, "ParamEyeBallY": -0.3,
              "Param11": 1.0, "Param61": 1.0, "ParamAngleY": 15,
              "ParamAngleX": 4, "ParamBodyAngleX": 4},
-    "愤怒": {"ParamBrowLY": -0.45, "ParamBrowRY": -0.45, "ParamBrowLAngle": -0.5,
-             "ParamBrowRAngle": 0.5, "ParamMouthForm": 0.4,
-             "ParamMouthOpenY": 0.45, "ParamEyeLOpen": 1.0,
-             "ParamEyeROpen": 1.0, "Param11": 1.0, "Param62": 0.3,
-             "ParamAngleY": -5, "ParamAngleZ": -4},
+    "愤怒": {"ParamBrowLY": -0.7, "ParamBrowRY": -0.7, "ParamBrowLAngle": -0.9,
+             "ParamBrowRAngle": 0.9, "ParamMouthForm": -0.75,
+             "ParamMouthOpenY": 0.06, "ParamEyeLOpen": 0.8,
+             "ParamEyeROpen": 0.8, "ParamEyeBallY": 0.9, "Param11": 1.0,
+             "ParamAngleY": -18, "ParamAngleZ": -10},
 }
 
 # per-emotion mouth loudness: how wide the mouth opens per unit of audio

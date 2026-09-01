@@ -21,7 +21,7 @@ import time
 
 from desktop_pet import EMOTIONS          # reuse the same emotion table
 
-DEMO_SEQ = ["平和", "开心", "兴奋", "惊喜", "温柔", "无奈", "生气", "愤怒"]
+DEMO_SEQ = ["平和", "开心", "兴奋", "惊喜", "温柔", "关切", "好奇", "期待", "无奈", "失望", "沮丧", "难过", "担心", "不满", "生气", "愤怒"]
 
 
 def main():
@@ -71,7 +71,7 @@ def main():
                 for name in DEMO_SEQ:
                     send({"emotion": name})
                     print(f"  -> 情绪 {name}")
-                    time.sleep(1.2)
+                    time.sleep(3)
                 continue
             if low.startswith("mouth"):
                 _, _, val = line.partition(" ")
