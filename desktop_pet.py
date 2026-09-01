@@ -474,7 +474,7 @@ EMOTIONS = {
              "ParamEyeBallX": 0.3, "ParamMouthForm": -0.25,
              "ParamMouthOpenY": 0.06, "ParamAngleZ": 3,
              "ParamAngleX": 4, "ParamAngleY": -2},
-    "好奇": {"ParamAngleZ": 9, "ParamEyeBallX": 0.3, "ParamEyeBallY": 0.1,
+    "好奇": {"ParamAngleZ": 22, "ParamEyeBallX": 0.3, "ParamEyeBallY": 0.1,
              "ParamBrowLY": 0.2, "ParamBrowRY": 0.05, "ParamMouthOpenY": 0.15,
              "ParamMouthForm": 0.1, "ParamEyeLOpen": 0.95,
              "ParamEyeROpen": 0.95},
