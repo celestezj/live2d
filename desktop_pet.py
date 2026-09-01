@@ -879,12 +879,13 @@ def express_frame(win, model, f, control, idle_motion, state, clothes=None,
 
 
 def render_frame(win, model, f, present_lookup, clothes=None, tug=None, valid=None,
-                 tug_zone="body"):
+                 tug_zone="body", demo_mouth=False):
     """Drive one animation frame; returns the alpha channel (HxW uint8).
     clothes: None = keep the demo's auto coat on/off, 0..1 = forced jacket
     level (right-double-click toggles it). tug: (tx, ty) mouse-pull reaction
     while locked, with tug_zone "head"/"body" choosing the reacting part
-    (for _apply_tug); valid: the model's parameter ids."""
+    (for _apply_tug); valid: the model's parameter ids. demo_mouth: True =
+    the old idle auto open/close mouth (default off: mouth stays shut)."""
     blink_frames = [{"ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0},
                     {"ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0},
                     {"ParamEyeLOpen": 0.05, "ParamEyeROpen": 0.05},
@@ -900,7 +901,10 @@ def render_frame(win, model, f, present_lookup, clothes=None, tug=None, valid=No
         v1 = blink_frames[b].get(pid, 1.0)
         model.SetParameterValue(pid, v0 + (v1 - v0) * frac)
 
-    model.SetParameterValue("ParamMouthOpenY", 0.5 + 0.5 * math.sin(f * 0.30))
+    if demo_mouth:
+        model.SetParameterValue("ParamMouthOpenY", 0.5 + 0.5 * math.sin(f * 0.30))
+    else:
+        model.SetParameterValue("ParamMouthOpenY", 0.0)   # idle demo: mouth shut
     model.SetParameterValue("ParamAngleZ", math.sin(f * 0.05) * 8.0)
     if "Param2" in present_lookup:               # coat on/off (auto sway or manual)
         if clothes is None:
@@ -1078,6 +1082,9 @@ def main():
     ap.add_argument("--click-through", action="store_true",
                     help="let mouse clicks pass through the window (ESC then "
                          "may not work; Alt+F4 or task manager to quit)")
+    ap.add_argument("--demo-talk", action="store_true",
+                    help="default demo (no args): keep the old auto open/close "
+                         "mouth while idle (default off: mouth stays shut)")
     ap.add_argument("--self-test", action="store_true",
                     help="render one transparent frame, print alpha stats, save "
                          "pet_preview.png, then exit")
@@ -1169,7 +1176,8 @@ def main():
                          valid=model_ids)
         else:
             render_frame(win, model, 0, present_lookup, clothes=0.0,
-                         tug=(0.0, 0.0), valid=model_ids)
+                         tug=(0.0, 0.0), valid=model_ids,
+                         demo_mouth=args.demo_talk)
 
         if args.self_test:
             raw = win.last_rgba
@@ -1281,7 +1289,8 @@ def main():
             else:
                 render_frame(win, model, f, present_lookup, clothes=clothes_value,
                              tug=win.tug, valid=model_ids,
-                             tug_zone=win.tug_zone)
+                             tug_zone=win.tug_zone,
+                             demo_mouth=args.demo_talk)
             f += 1
     finally:
         if control_server is not None:

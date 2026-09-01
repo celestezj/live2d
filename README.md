@@ -232,6 +232,7 @@ python desktop_pet.py --emotion 兴奋 --lipsync /path/to/speech.wav --lipsync-d
 python desktop_pet.py --emotion 开心 --listen # 监听系统播放，任何播放器自动对口
 python desktop_pet.py --control-port 5000     # 开 TCP 控制口，外部随时切情绪/嘴
 python desktop_pet.py --click-through         # 鼠标点击穿透窗口（ESC 会失效，用 Alt+F4 退出）
+python desktop_pet.py --demo-talk             # 默认演示：恢复旧版"待机时一直张嘴闭嘴"（默认关，嘴是闭着的）
 python desktop_pet.py --self-test             # 只渲染一帧透明图并输出 alpha 统计（不弹窗，见 4.5）
 python desktop_pet.py --self-test --emotion 兴奋  # 指定情绪自检
 ```
@@ -249,7 +250,7 @@ python desktop_pet.py --self-test --emotion 兴奋  # 指定情绪自检
 - **缩放**：`--scale` 设初始大小；运行中按 **`+` / `-`** 实时放大/缩小、**`0`** 复位。缩放由 `model.SetScale()` 实现（绝对系数，围绕窗口中心，实测 1.0=撑满、2.0=两倍、0.5=一半）。注意 `--scale` **没有上限**，但人物在 scale 1.0 时已占满窗口高度，再放大**头顶会裁掉**——所以要"更大的人物"优先加大窗口而不是调 scale。
 - **穿脱外套**：**右键双击人物**（两次右键落在人物身上、0.5 秒内且相隔不远）→ 脱掉外套；再右键双击穿回来。双击那一对点击会被吞掉，不会误触发上面的"右键单击锁定"。切换约 0.5 秒平滑过渡（外套就是 llny 的 `Param2`，默认**穿着**外套，不再自动穿脱；右键双击手动切换，所有模式都从穿着外套开始）。
 - **退出**：按 `ESC`（或 `Alt+F4`）。
-- 内置演示动画：去水印（Param14）+ 眨眼 + 说话 + 轻微摇头（默认穿着外套）。自测输出示例：`corner alpha mean = 0.000`（背景全透明）、`opaque px = 19%`（人物实体）。
+- 内置演示动画：去水印（Param14）+ 眨眼 + **嘴巴闭合**（默认不再不停张嘴闭嘴；想要旧版自动开合嘴加 `--demo-talk`）+ 轻微摇头（默认穿着外套）。自测输出示例：`corner alpha mean = 0.000`（背景全透明）、`opaque px = 19%`（人物实体）。
 - **`--viewer` 待机模式（接近 Live2DViewer 默认）**：复刻 Live2DViewer 加载 llny 后的默认待机——Python 驱动**规律眨眼**（约每 2.8 秒一次）+ **多轴头/身体摆动**（ParamAngleX/Y/Z ±6~10°、ParamBodyAngleX/Y/Z），这些角度正是 `llny.physics3.json` 的物理输入；`model.Update()` 内部求值物理，把 84 个 ArtMesh 旋转参数（丸子头、束发、后发、草莓结等）带动 ±5~13°——这就是原版里"耳朵/头发会动"的机制。模型自带的孤儿 idle 运动 `motions/idel.motion3.json`（约 3 秒：呼吸 + 轻微肢体摆动）持续循环。比纯 SDK 自动模式（眨眼稀疏、摆动不可调）更接近原版。拖拽/缩放/退出按键与默认模式完全一致。
 
 - **`--emotion NAME` 情绪模式（express）**：在 `--viewer` 那套待机（规律眨眼 + 多轴摆动 + 物理甩发）之上叠加情绪姿态，共 **16 种**：平和、开心、兴奋、惊喜、温柔、关切、好奇、期待、无奈、失望、沮丧、难过、担心、不满、生气、愤怒。每种都由 llny 现有参数设计（眉毛角度/形态、眼开、嘴型/开合、生气/哭/黑脸/星星眼等叠画、头/身角度），**每个表情的细节设计与参数配方见 `EMOTIONS.md`**。注意：llny 的**笑眼、泪、撅嘴、脸红参数实测不渲染**（2026-09-01 探针验证，属死/近不可见参数），配方不依赖它们——例如 愤怒 = 咧嘴 + 张嘴咆哮 + 生气记号 + 低首，沮丧 = 黑脸 + 呆滞垂头垮肩。情绪切换约 **0.25 秒平滑交叉淡入**（`blend = blend*0.82 + target*0.18`）；**未被当前情绪使用的叠画开关会自动淡回 0**，不会残留上一个表情的生气/脸红/鼓脸。纯 `--viewer` 不加任何参数即回到原待机，默认演示（`render_frame`）与 `--viewer` 逻辑保持不变。
