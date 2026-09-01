@@ -467,7 +467,7 @@ EMOTIONS = {
              "ParamAngleY": 6},
     "温柔": {"ParamMouthForm": 0.35, "ParamEyeLOpen": 0.85,
              "ParamEyeROpen": 0.85, "ParamBrowLY": -0.1, "ParamBrowRY": -0.1,
-             "ParamAngleZ": 3, "Param13": 1.0, "Param28": -6,
+             "ParamAngleZ": 3, "Param13": 1.0, "Param28": -8,
              "ParamEyeBallY": -0.2, "ParamAngleY": -3},
     "关切": {"ParamBrowLAngle": -0.3, "ParamBrowRAngle": 0.3,
              "ParamEyeLOpen": 0.7, "ParamEyeROpen": 0.7,
@@ -672,13 +672,14 @@ def _apply_tug(model, valid, tug, zone="body"):
     Values are additive on top of the pose; the main loop decays `tug` to
     (0,0) on release so the pet returns to its normal pose."""
     if not valid or not tug or not any(tug):
-        return
+        return 0.0
     tx, ty = tug
     if zone == "head":
         if tx and "ParamAngleX" in valid:
             _add_param_delta(model, "ParamAngleX", tx * HEAD_TURN_AMP)
         if ty and "ParamAngleY" in valid:
             _add_param_delta(model, "ParamAngleY", -ty * HEAD_TUG_AMP)
+        return 0.0
     elif zone == "legs":                        # shy: squat + thighs together +
         s = min(1.0, math.hypot(tx, ty))        # bashful face + arms tucked inward
         if "Param28" in valid:                  # Param28 "yy": negative closes legs
@@ -705,6 +706,7 @@ def _apply_tug(model, valid, tug, zone="body"):
             _add_param_delta(model, "ParamAngleY", -SHY_LOOKDOWN * s)
         if "ParamMouthForm" in valid:           # soft bashful smile
             _add_param_delta(model, "ParamMouthForm", SHY_MOUTH * s)
+        return -LEG_CLOSE_AMP * s if "Param28" in valid else 0.0
     else:                                       # body: head + torso turn together
         if tx and "ParamAngleX" in valid:
             _add_param_delta(model, "ParamAngleX", tx * BODY_TURN_AMP)
@@ -712,6 +714,7 @@ def _apply_tug(model, valid, tug, zone="body"):
             _add_param_delta(model, "ParamBodyAngleX", tx * BODY_YAW_AMP)
         if ty and "ParamBodyAngleY" in valid:
             _add_param_delta(model, "ParamBodyAngleY", ty * BODY_TUG_AMP)
+        return 0.0
 
 
 # --- random body actions (express mode, only with --random-actions) ---------
@@ -860,8 +863,13 @@ def express_frame(win, model, f, control, idle_motion, state, clothes=None,
         model.StartMotion("Idle", 0, priority=1)
     if clothes is not None and "Param2" in valid:
         model.SetParameterValue("Param2", clothes)   # right-dbl-click jacket toggle
-    _apply_tug(model, valid, tug, tug_zone)          # locked-drag reaction
+    p28_shy = _apply_tug(model, valid, tug, tug_zone)   # locked-drag reaction
     model.Update()
+    # llny's physics drives Param28 ("yy" hip/leg) off the head/body sway and
+    # overwrites the emotion's leg pose every frame; re-apply the pose value
+    # (plus any shy-tug squeeze) so the legs actually hold the pose.
+    if "Param28" in valid and ("Param28" in pose or p28_shy):
+        model.SetParameterValue("Param28", blend.get("Param28", 0.0) + p28_shy)
     live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)       # fully transparent background
     GL.glEnable(GL.GL_BLEND)
     model.Draw()
