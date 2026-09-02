@@ -5,7 +5,9 @@ fully transparent (per-pixel alpha via a Win32 layered window), no window chrome
 The character plays a looping demo animation (watermark off + blink + talk +
 head sway + coat on/off). Press ESC (or Alt+F4) to quit. Drag with the left
 mouse button (pressing on a visible pixel of the character) to move it around.
-Resize the character live with the + / - keys (0 resets to --scale).
+Resize the character live with the mouse wheel (over the pet) or the + / -
+keys (0 resets to the startup size). Resizing grows/shrinks the whole window
+so the pet is never clipped.
 
 --viewer mode reproduces the idle Live2DViewer shows by default for llny:
 regular blinking plus a multi-axis head/body sway drive the model's physics, so
@@ -207,13 +209,19 @@ class LayeredWindow:
         self.tug_target = (0.0, 0.0)              # mouse writes this while tugging (locked)
         self._tug_anchor = None                   # (x, y) where the tug press started
         self.tug_zone = "body"                    # "head" | "body" (from the grab point)
-        self.scale = 1.0                          # live model scale (the + / - / 0
-                                                  # keys change it); the click-zone
-                                                  # thresholds are derived from it
-                                                  # in _zone_y, so they follow the
-                                                  # scaled character on screen
+        self.scale = 1.0                          # live model fill-factor scale:
+                                                  # = args.scale, set once at
+                                                  # startup and never changed by
+                                                  # the zoom controls. The click-
+                                                  # zone thresholds are derived
+                                                  # from it in _zone_y, so they
+                                                  # follow the scaled character
+        self.zoom_target = 0.0                # wheel scroll delta waiting to be
+                                              # folded into a window resize by the
+                                              # main loop (0 = nothing pending)
         glfw.set_mouse_button_callback(self.window, self._on_mouse_button)
         glfw.set_cursor_pos_callback(self.window, self._on_cursor_pos)
+        glfw.set_scroll_callback(self.window, self._on_scroll)
 
         glfw.show_window(self.window)
         glfw.poll_events()
@@ -229,10 +237,42 @@ class LayeredWindow:
         return alpha[self.h - 1 - int(y), int(x), 3] >= 16
 
     def set_scale(self, s):
-        """Keep the click zones in sync with the model scale. main() calls this
-        whenever the + / - / 0 keys change it (probed: the character is scaled
-        around the window centre, so its parts move as scale changes)."""
+        """Set the model fill-factor scale used by _zone_y. Called once at
+        startup (args.scale). The zoom controls (mouse wheel / +/- keys) keep
+        this unchanged and resize the WINDOW instead, so the pet grows whole
+        on screen with its parts staying at the same canvas fractions."""
         self.scale = s
+
+    def resize(self, new_w, new_h):
+        """Rebuild the layered-window DIB and the GLFW window at a new pixel
+        size, keeping the current window centre fixed on screen, and fit the
+        GL viewport to the new size so the model re-fills it on the next Draw
+        (probed: the model's rendered size follows the viewport)."""
+        old_wx, old_wy = glfw.get_window_pos(self.window)
+        cx = old_wx + self.w // 2
+        cy = old_wy + self.h // 2
+        gdi32.SelectObject(self.hdc_mem, self.old_bmp)     # drop the old DIB
+        gdi32.DeleteObject(self.bmp)
+        bmi = _dib_info(new_w, new_h)
+        pixels = ctypes.c_void_p()
+        self.bmp = gdi32.CreateDIBSection(
+            self.hdc_mem, ctypes.byref(bmi), ctypes.c_uint(0),
+            ctypes.byref(pixels), None, 0)
+        if not self.bmp:
+            raise RuntimeError("CreateDIBSection failed")
+        self.pixels = pixels
+        self.old_bmp = gdi32.SelectObject(self.hdc_mem, self.bmp)
+        self.w, self.h = new_w, new_h
+        self.size = SIZE(new_w, new_h)
+        self.last_rgba = None                     # next present() re-fills it
+        glfw.set_window_size(self.window, new_w, new_h)
+        # The pet's rendered size follows the GL viewport (probed: neither
+        # glfw.set_window_size nor model.Resize touches glViewport, so the
+        # model kept rendering at the original window size after a resize).
+        # Fit the viewport to the new window; zoom keeps the aspect constant,
+        # so the model re-fills the bigger window without clipping.
+        GL.glViewport(0, 0, new_w, new_h)
+        glfw.set_window_pos(self.window, cx - new_w // 2, cy - new_h // 2)
 
     def _zone_y(self, canvas_frac):
         """Window y (content coords, y down) of a body-part boundary. The llny
@@ -356,6 +396,20 @@ class LayeredWindow:
         # feedback loop: moving the window under a stationary cursor changes the
         # content coords, which previously pulled the window back and forth.
         glfw.set_window_pos(window, round(wx + x - cx0), round(wy + y - cy0))
+
+    def _on_scroll(self, window, xoff, yoff):
+        """Mouse-wheel zoom over the character. Only counts while the cursor is
+        over a visible pixel (same rule as clicks) and while no drag/tug is in
+        progress, so resizing mid-interaction can't disturb the drag math. The
+        raw yoff is accumulated on zoom_target; the main loop folds it into a
+        window resize once per frame."""
+        if self._drag is not None or self._tug_anchor is not None:
+            return                                # dragging: ignore the wheel
+        x, y = glfw.get_cursor_pos(window)
+        if not self._hit_character(x, y):
+            return                                # transparent area: ignore
+        if yoff:
+            self.zoom_target = max(-8.0, min(8.0, self.zoom_target + yoff))
 
     def present(self):
         """Blit the just-rendered GL back buffer into the layered window."""
@@ -1047,11 +1101,12 @@ def main():
     ap.add_argument("--x", type=int, default=None, help="window left (default top-right)")
     ap.add_argument("--y", type=int, default=None, help="window top (default top-right)")
     ap.add_argument("--scale", type=float, default=1.0,
-                    help="character scale (1.0 = fitted to the window). Larger "
-                         "values zoom in, but the pet already fills the window "
-                         "height so the head clips as scale grows — enlarge the "
-                         "window (--width/--height) to show a physically bigger "
-                         "pet. +/-/0 keys resize it live.")
+                    help="model fill factor (1.0 = the pet exactly fits the "
+                         "window height). Use the mouse wheel / +/- keys to "
+                         "resize the WINDOW instead — that zooms the pet "
+                         "without ever clipping it; --scale only shrinks "
+                         "inside the fixed startup window (< 1) or overflows "
+                         "it (> 1).")
     ap.add_argument("--viewer", action="store_true",
                     help="Live2DViewer-style idle: regular blink + multi-axis "
                          "head/body sway drive the physics (hair/ears/bows "
@@ -1222,15 +1277,39 @@ def main():
         if args.control_port:
             control_server = start_control_server(args.control_port, control)
 
-        print("transparent pet running — press ESC to quit, +/- to resize, "
-              "0 to reset; right-click to lock/unlock position, "
-              "right-DOUBLE-click to take the jacket off/on; while locked, "
-              "drag the head to turn/nod it, drag the body to turn it, drag "
-              "the legs to make her shy (thighs together); double-click her "
-              "hips/thighs to make her shy instantly (Alt+F4 works too)")
+        print("transparent pet running — press ESC to quit; mouse wheel over "
+              "the pet (or +/- keys) resizes it, 0 resets the size; right-"
+              "click to lock/unlock position, right-DOUBLE-click to take the "
+              "jacket off/on; while locked, drag the head to turn/nod it, "
+              "drag the body to turn it, drag the legs to make her shy "
+              "(thighs together); double-click her hips/thighs to make her "
+              "shy instantly (Alt+F4 works too)")
         f = 0
         prev_keys = {}
         clothes_level = 0.0               # Param2 level: 0 = dressed, 1 = coat removed
+
+        # Zoom state: the pet's on-screen size is (window height) x (the fill
+        # factor scale, fixed at args.scale). Zooming resizes the WINDOW (and
+        # re-fits the model) so the pet grows/shrinks whole with no clipping.
+        # Mouse-wheel deltas and the +/- / 0 keys funnel into apply_zoom().
+        start_w, start_h = args.width, args.height
+        zoom = 1.0                        # window-size multiplier over startup
+
+        def apply_zoom():
+            """Resize window + model so the pet is 'zoom' x the startup size,
+            clamped to the workarea and a 120px floor, centre fixed."""
+            nonlocal zoom
+            _, _, mw, mh = glfw.get_monitor_workarea(glfw.get_primary_monitor())
+            mw = max(120, mw - 40)
+            mh = max(120, mh - 40)
+            zoom = max(0.1, min(zoom, mw / start_w, mh / start_h))
+            nw = max(120, round(start_w * zoom))
+            nh = max(120, round(start_h * zoom))
+            model.Resize(nw, nh)
+            model.SetScale(scale)         # keep the same fill factor
+            win.resize(nw, nh)
+            print(f"zoom = {zoom:.2f}  ({nw}x{nh})")
+
         while True:
             if glfw.window_should_close(win.window) or \
                glfw.get_key(win.window, glfw.KEY_ESCAPE) == glfw.PRESS:
@@ -1238,7 +1317,16 @@ def main():
 
             win._fire_pending_click()     # confirm lone right-clicks (lock/unlock)
 
-            # live resize: edge-triggered + / - / 0 (window needs focus first)
+            # live resize: mouse wheel over the pet, or edge-triggered + / - / 0.
+            # All funnel into apply_zoom() (the window resizes; the model's fill
+            # factor scale is left untouched). Wheel deltas are accumulated on
+            # win.zoom_target by _on_scroll during poll_events; consume a few
+            # notches' worth here each frame.
+            if win.zoom_target:
+                take = max(-4.0, min(4.0, win.zoom_target))
+                win.zoom_target -= take
+                zoom = max(0.1, min(10.0, zoom * 1.15 ** take))
+                apply_zoom()
             pressed = {}
             for key in (glfw.KEY_EQUAL, glfw.KEY_KP_ADD, glfw.KEY_MINUS,
                         glfw.KEY_KP_SUBTRACT, glfw.KEY_0):
@@ -1248,20 +1336,14 @@ def main():
                          for k in (glfw.KEY_EQUAL, glfw.KEY_KP_ADD,
                                    glfw.KEY_MINUS, glfw.KEY_KP_SUBTRACT, glfw.KEY_0)}
             if pressed.get(glfw.KEY_EQUAL) or pressed.get(glfw.KEY_KP_ADD):
-                scale = min(10.0, scale * 1.15)
-                model.SetScale(scale)
-                win.set_scale(scale)
-                print(f"scale = {scale:.2f}")
+                zoom = max(0.1, min(10.0, zoom * 1.15))
+                apply_zoom()
             if pressed.get(glfw.KEY_MINUS) or pressed.get(glfw.KEY_KP_SUBTRACT):
-                scale = max(0.1, scale / 1.15)
-                model.SetScale(scale)
-                win.set_scale(scale)
-                print(f"scale = {scale:.2f}")
+                zoom = max(0.1, min(10.0, zoom / 1.15))
+                apply_zoom()
             if pressed.get(glfw.KEY_0):
-                scale = args.scale
-                model.SetScale(scale)
-                win.set_scale(scale)
-                print(f"scale reset = {scale:.2f}")
+                zoom = 1.0
+                apply_zoom()
 
             # jacket: Param2 0 = dressed, 1 = coat removed (probed: llny names
             # it 去外套). Default dressed; a right-double-click toggles it and
