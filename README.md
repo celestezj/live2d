@@ -259,7 +259,7 @@ python desktop_pet.py --self-test --emotion 兴奋  # 指定情绪自检
 
 - **`--lipsync wav` 说话对口型**：宠物自己播放该音轨（soundfile 解码，wav/flac/ogg 均可），并**逐块计算 RMS 能量**（0~1）驱动 `ParamMouthOpenY`——**嘴巴跟随音频能量开合，对上口型**；音轨循环播放。每段情绪的"说话音量"不同（`MOUTH_AMP`：兴奋/愤怒 1.25~1.3 张得更大，温柔/沮丧 0.6 张得更小），播放间隙嘴回到该情绪自带的嘴型开度。没有可用音频输出（如远程桌面的"幽灵"设备）时打印警告并自动跳过，不会卡死；用 `--lipsync-device` 指定输出设备号（先 `python -c "import sounddevice as sd; print(sd.query_devices())"` 查看）。
 
-- **`--listen` 监听系统播放（自动对口）**：宠物**不需要拿到音频文件**——它用 WASAPI **回环捕获**实时"偷听"电脑正在输出的声音，逐块 RMS 驱动嘴巴。你的 AI 管线（或任何播放器）正常放声音，嘴就自动跟上；不说话就闭口。这就是"随着音频播放器自动控制"。依赖 `pyaudiowpatch`（已装入 voice-asr 环境）。自动选第一个 `[Loopback]` 设备；可用 `--listen-device` 指定设备号（先 `python -c "from system_listen import list_loopback_devices; list_loopback_devices()"` 查看）。注意：回环会听到**系统所有声音**（音乐、视频也会带动嘴）；且需要一台有真实音频输出的机器，远程桌面的幽灵设备上不会出声。`--lipsync` 与 `--listen` 互斥。
+- **`--listen` 监听系统播放（自动对口）**：宠物**不需要拿到音频文件**——它用 WASAPI **回环捕获**实时"偷听"电脑正在输出的声音，逐块 RMS 驱动嘴巴。你的 AI 管线（或任何播放器）正常放声音，嘴就自动跟上；不说话就闭口。这就是"随着音频播放器自动控制"。依赖 `pyaudiowpatch`（已装入 voice-asr 环境）。自动选第一个 `[Loopback]` 设备；可用 `--listen-device` 指定设备号（先 `python -c "from system_listen import list_loopback_devices; list_loopback_devices()"` 查看）。注意：回环会听到**系统所有声音**（音乐、视频也会带动嘴）；且需要一台有真实音频输出的机器，远程桌面的幽灵设备上不会出声。**嘴开合按"环境底噪相对门"而非绝对音量**：回环电平随音量/内容变化很大，所以嘴不是看"够不够响"，而是看当前块是否比**最近几秒里最安静的 5%**（环境底噪）高出约 +4 dB——任何音量下，说话的词句能张大、句与句之间回到底噪就闭嘴，只有连续的音乐/噪声才会持续带动嘴。`--lipsync` 与 `--listen` 互斥。
 
 - **`--control-port PORT` 外部随时控制**：在 `127.0.0.1:PORT` 起一个 TCP 服务，**每行一个 JSON** 即可随时切换情绪 / 控制嘴巴开合——适合接 AI 语音输出管线：
   ```python

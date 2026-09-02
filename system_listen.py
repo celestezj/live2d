@@ -25,38 +25,63 @@ input-only streams; returning None raises
 which the C layer prints and then leaks into the main thread. Always
 `return (None, pyaudio.paContinue)`.
 
-Loudness is normalised against a slowly-decaying PEAK instead of a fixed
-full-scale value: system loopback levels vary a lot with the system volume /
-what's playing, so a fixed threshold makes quiet videos barely move the mouth.
-Adaptive normalisation keeps the mouth visible regardless of volume.
+The mouth opening is gated against the AMBIENT NOISE FLOOR of the loopback
+mix, not against an absolute dBFS line: system levels vary hugely with the
+volume / content, so a fixed threshold either keeps the mouth half-open for
+whole stretches (gate too low — no speech rhythm) or never opens it at a
+normal listening volume (gate too high). We track a rolling 5th-percentile
+floor (~quietest 3 s) and open the mouth only when a chunk sits ~+4 dB above
+it, ramping up to the recent peak — volume-independent, and real gaps between
+words stay shut.
 """
 import time
 import traceback
+from collections import deque
 
 import numpy as np
 import pyaudiowpatch as pyaudio
 
-# Silence threshold for system audio — below this RMS the mouth stays shut.
-# Set low: a quiet system / low volume can otherwise read as "no signal".
-FLOOR = 0.004
+FLOOR = 0.004                 # absolute detect floor — used only for the first-
+                              # audio "hint" print and as the floor while the
+                              # history is still short (see _noise_floor)
+OPEN_RATIO = 1.58             # chunk must exceed ~+4 dB above ambient to open
+FLOOR_HIST = 300              # chunks (~3 s @ 48 kHz / 512) for the floor estimate
+FLOOR_PCT = 5                 # "ambient" = 5th percentile of recent chunk RMS
+PEAK_DECAY = 0.998            # recent-peak decay per chunk (~ -18%/s)
 
 
-def _adaptive(rms: float, peak: float) -> float:
-    """0..1 loudness against the current peak; quiet chunks don't exceed 1."""
-    if rms < FLOOR:
+def _noise_floor(hist) -> float:
+    """Ambient floor = quietest 5% of the last ~3 s of chunk RMS. Adapts to any
+    volume; the percentile tracks the gap/background level even as it slowly
+    changes, while short speech syllables barely move it."""
+    arr = np.asarray(hist, dtype=np.float64)
+    if arr.size < 60:
+        return max(float(arr.min()), 1e-6)
+    return max(float(np.percentile(arr, FLOOR_PCT)), 1e-6)
+
+
+def _level(rms: float, peak: float, hist) -> float:
+    """0..1 mouth opening: stays 0 until `rms` clears OPEN_RATIO× the ambient
+    floor, then ramps linearly to 1.0 as it approaches the recent peak. Quiet
+    playback opens as easily as loud playback — the gate is relative."""
+    lo = _noise_floor(hist) * OPEN_RATIO
+    if rms <= lo:
         return 0.0
-    return min(1.0, rms / max(peak, FLOOR))
+    hi = max(peak, lo * 4)            # avoid a ~0 span before the peak wakes up
+    return min(1.0, (rms - lo) / max(hi - lo, 1e-6))
 
 
 class _Capture:
-    """PyAudio-style stream callback that measures RMS of the loopback mix
-    and normalises it against a self-adapting peak."""
+    """PyAudio-style stream callback that measures RMS of the loopback mix and
+    maps it to a mouth opening relative to the ambient noise floor (volume-
+    independent: quiet playback opens as easily as loud, and gaps close)."""
 
     def __init__(self, on_energy):
         self.on_energy = on_energy
         self.n_callbacks = 0
         self.last_advance = time.monotonic()
         self.peak = FLOOR * 2          # start low so the first sound registers
+        self.hist = deque(maxlen=FLOOR_HIST)   # chunk RMS for the floor estimate
 
     def callback(self, in_data, frame_count, time_info, status):
         try:
@@ -64,12 +89,13 @@ class _Capture:
                 arr = np.frombuffer(in_data, dtype=np.float32)
                 if arr.size:
                     rms = float(np.sqrt(np.mean(arr * arr)))
-                    # track the recent peak (decay ~ -18%/s at 48000/512 chunks)
-                    self.peak = max(rms, self.peak * 0.998)
+                    # recent peak (decay ~ -18%/s at 48000/512 chunks)
+                    self.peak = max(rms, self.peak * PEAK_DECAY)
+                    self.hist.append(rms)
                     if self.n_callbacks == 0 and rms >= FLOOR:
                         print(f"listen: audio detected (rms≈{rms:.3f}) — "
                               "mouth now follows the sound")
-                    self.on_energy(_adaptive(rms, self.peak))
+                    self.on_energy(_level(rms, self.peak, self.hist))
                     self.n_callbacks += 1
                     self.last_advance = time.monotonic()
         except Exception:
