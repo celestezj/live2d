@@ -716,7 +716,7 @@ BUBBLE_FONT_CANDIDATES = [r"C:\Windows\Fonts\msyh.ttc",    # 常规(非粗)优�
                           r"C:\Windows\Fonts\simhei.ttf",
                           r"C:\Windows\Fonts\simsun.ttc"]
 BUBBLE_MAX_LINES = 3                # hard line cap (keeps the bubble off the face)
-BUBBLE_FONT_FRAC = 0.034            # start font px = round(contentH * frac); too-
+BUBBLE_FONT_FRAC = 0.028            # start font px = round(contentH * frac); too-
                                     # long text shrinks toward ~0.62x
 BUBBLE_TEXT_W_FRAC = 0.76           # wrap width = W * frac (minus inner padding)
 BUBBLE_CROWN_GAP = 7                # air gap between the body bottom and the crown
@@ -736,9 +736,9 @@ BUBBLE_FILL_TOP = (252, 247, 238)   # 暖米黄渐变·上沿略提亮
 BUBBLE_FILL_BOT = (246, 236, 215)   # 暖米黄渐变·下沿略深 (中心≈#f8efde)
 BUBBLE_OUTLINE = (214, 193, 150)    # 细 浅棕褐 描边
 BUBBLE_TEXT_FILL = (58, 53, 47)     # 文字 近黑深灰
-BUBBLE_SHADOW_ALPHA = 55            # 投影浓度(微弱; 高斯后更淡)
-BUBBLE_SHADOW_DY_FRAC = 0.50        # 投影下移 px = round(fs*frac); 须 > blur 才
-BUBBLE_SHADOW_BLUR_FRAC = 0.34      # 不致晕散到气泡上方成暗边; 高斯半径 px
+BUBBLE_SHADOW_ALPHA = 42            # 投影浓度(微弱; 高斯后更淡)
+BUBBLE_SHADOW_DY_FRAC = 0.30        # 投影下移 px = round(fs*frac); 须 > blur 才
+BUBBLE_SHADOW_BLUR_FRAC = 0.22      # 不致晕散到气泡上方成暗边; 高斯半径 px
 
 _font_cache = {}                    # px -> ImageFont
 _bubble_img_cache = {}              # (text, fs, textw, max_lines) -> PIL image
