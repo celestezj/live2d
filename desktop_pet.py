@@ -22,8 +22,10 @@ The mouth follows audio energy — either from a wav the pet plays itself
 (--lipsync) or from whatever the system is currently playing (--listen, WASAPI
 loopback capture, so any audio player drives it) — scaled by the emotion's
 loudness (MOUTH_AMP). With --control-port an external pipeline (AI voice
-output, etc.) can switch the emotion or force the mouth at any time over TCP —
-see the README for the JSON protocol.
+output, etc.) can switch the emotion, show/hide a speech bubble (a rounded
+white box pinned above her head) or force the mouth at any time over TCP —
+see the README for the JSON protocol. The bubble text stays up until it is
+explicitly hidden with {"say": null}, and never changes the emotion/mouth.
 
 Usage:
   python desktop_pet.py [--model /path/to/model.model3.json]
@@ -32,7 +34,7 @@ Usage:
                         [--emotion NAME]     # express mode, start in this emotion
                         [--lipsync wav]      # pet plays wav, mouth follows it
                         [--listen]           # mouth follows any system audio
-                        [--control-port PORT]  # TCP JSON control (switch emotion/mouth)
+                        [--control-port PORT]  # TCP JSON control (emotion/say/mouth)
                         [--self-test]        # one transparent frame + alpha stats
 
 Note: GLFW_TRANSPARENT_FRAMEBUFFER is macOS-only, so on Windows we render to the
@@ -56,7 +58,7 @@ import glfw
 import live2d.v3 as live2d
 import numpy as np
 from OpenGL import GL
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from lipsync import play_wav_with_energy
 from system_listen import listen_system_output
@@ -154,8 +156,14 @@ class LayeredWindow:
     """A frameless, always-on-top GL window presented as a per-pixel-alpha
     layered window: each frame the GL back buffer is read back and blitted."""
 
-    def __init__(self, width, height, x=None, y=None, click_through=False):
+    def __init__(self, width, height, x=None, y=None, click_through=False,
+                 sky=0):
         self.w, self.h = width, height
+        self.sky = sky                  # reserved transparent band at the TOP
+                                        # (content height = h - sky): the pet is
+                                        # drawn into the bottom content rows so a
+                                        # speech bubble has permanent headroom and
+                                        # the pet never has to shrink for one
 
         glfw.window_hint(glfw.VISIBLE, glfw.FALSE)     # avoid flashing raw GL
         glfw.window_hint(glfw.DECORATED, glfw.FALSE)   # no window chrome
@@ -169,7 +177,14 @@ class LayeredWindow:
         if x is None:
             mon = glfw.get_primary_monitor()
             _, _, mw, mh = glfw.get_monitor_workarea(mon)
-            x, y = mw - width - 40, 40                    # top-right corner
+            x = mw - width - 40                           # top-right corner
+            # The window is content + the reserved sky band taller, so it can
+            # outgrow the work area on high-DPI screens (4K/250%: content 1800
+            # + 360 sky). Keep the usual top-right spot when it fits; otherwise
+            # sit the window on the work-area bottom so the pet stays fully on
+            # screen (the sky may then run off the top — bubbles still clip
+            # gracefully at the screen edge).
+            y = 40 if 40 + height <= mh else max(0, mh - height)
         glfw.set_window_pos(self.window, x, y)
 
         self.hwnd = glfw.get_win32_window(self.window)
@@ -219,6 +234,12 @@ class LayeredWindow:
         self.zoom_target = 0.0                # wheel scroll delta waiting to be
                                               # folded into a window resize by the
                                               # main loop (0 = nothing pending)
+        # Speech-bubble overlay for present(): (RGBA top-down ndarray, x, y) or
+        # None. Set by the main loop each frame from PetControl.bubble; present()
+        # alpha-composites it onto the readback (never into last_rgba, so the
+        # mouse hit-test keeps working on the pet's own pixels).
+        self.overlay = None
+        self._bubble_cx = None                # smoothed head-centre for the bubble
         glfw.set_mouse_button_callback(self.window, self._on_mouse_button)
         glfw.set_cursor_pos_callback(self.window, self._on_cursor_pos)
         glfw.set_scroll_callback(self.window, self._on_scroll)
@@ -269,17 +290,33 @@ class LayeredWindow:
         # The pet's rendered size follows the GL viewport (probed: neither
         # glfw.set_window_size nor model.Resize touches glViewport, so the
         # model kept rendering at the original window size after a resize).
-        # Fit the viewport to the new window; zoom keeps the aspect constant,
-        # so the model re-fills the bigger window without clipping.
-        GL.glViewport(0, 0, new_w, new_h)
+        # Fit the viewport to the new CONTENT band (window minus the top sky
+        # band); zoom keeps the aspect constant, so the model re-fills the
+        # bottom content rows without clipping.
+        GL.glViewport(0, 0, new_w, new_h - self.sky)
         glfw.set_window_pos(self.window, cx - new_w // 2, cy - new_h // 2)
+
+    def begin_frame(self):
+        """Reserved-sky layout setup for this frame. The model's per-frame
+        clearBuffer only clears the (content-sized) viewport, so the sky band
+        above the pet would otherwise keep stale pixels — clear the whole window
+        first, then pin the viewport to the bottom content rows. The pet keeps
+        its original pixel size and on-screen place; only the window grew upward
+        to give the speech bubble a permanent home (no shrink-to-fit ever)."""
+        if self.sky:
+            GL.glViewport(0, 0, self.w, self.h)
+            GL.glClearColor(0.0, 0.0, 0.0, 0.0)
+            GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+            GL.glViewport(0, 0, self.w, self.h - self.sky)
 
     def _zone_y(self, canvas_frac):
         """Window y (content coords, y down) of a body-part boundary. The llny
-        canvas (1300x1800) is scaled to fit the window by height and centred, so
-        a canvas-height-fraction lands at h * (0.5 + (cf - 0.5) * scale) — the
-        fixed HEAD_ZONE/LEG_ZONE fractions only match the window at scale 1.0."""
-        return self.h * (0.5 + (canvas_frac - 0.5) * self.scale)
+        canvas (1300x1800) is scaled to fit the content band by height and
+        centred there, so a canvas-height-fraction lands at
+        sky + ch * (0.5 + (cf - 0.5) * scale) where ch = h - sky — the fixed
+        HEAD_ZONE/LEG_ZONE fractions only match the window at scale 1.0."""
+        ch = self.h - self.sky
+        return self.sky + ch * (0.5 + (canvas_frac - 0.5) * self.scale)
 
     def _on_mouse_button(self, window, button, action, mods):
         if action == glfw.PRESS:
@@ -385,7 +422,7 @@ class LayeredWindow:
             x0, y0 = self._tug_anchor
             # a ~15% width / 12% height drag already reaches the full reaction
             tx = max(-1.0, min(1.0, (x - x0) / (self.w * 0.15)))
-            ty = max(-1.0, min(1.0, (y - y0) / (self.h * 0.12)))
+            ty = max(-1.0, min(1.0, (y - y0) / ((self.h - self.sky) * 0.12)))
             self.tug_target = (tx, ty)
         if self._drag is None:
             return
@@ -416,7 +453,17 @@ class LayeredWindow:
         GL.glReadBuffer(GL.GL_BACK)
         buf = GL.glReadPixels(0, 0, self.w, self.h, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
         raw = np.frombuffer(buf, dtype=np.uint8).reshape(self.h, self.w, 4)
-        self.last_rgba = raw
+        ov = self.overlay
+        if ov is not None:
+            # Keep last_rgba pet-only: the mouse hit-test and the bubble's own
+            # crown detection must never see the bubble's pixels. raw (a
+            # read-only view over glReadPixels' bytes) is copied so the overlay
+            # can be composited in place.
+            self.last_rgba = raw
+            raw = np.array(raw)
+            self._blend_overlay(raw, ov)
+        else:
+            self.last_rgba = raw
         al = raw[:, :, 3].astype(np.uint16)
         out = np.empty((self.h, self.w, 4), dtype=np.uint8)
         out[:, :, 0] = (raw[:, :, 2].astype(np.uint16) * al // 255).astype(np.uint8)  # B
@@ -433,6 +480,33 @@ class LayeredWindow:
             None, ctypes.byref(self.size),
             self.hdc_mem, ctypes.byref(self.pt_src),
             0, ctypes.byref(self.blend), ULW_ALPHA)
+
+    def _blend_overlay(self, raw, ov):
+        """Alpha-over the speech-bubble overlay onto the readback in place.
+        raw is the straight-alpha RGBA readback (row 0 = window BOTTOM, as GL
+        hands it back); ov = (img, x, y) is a straight-alpha top-down RGBA
+        ndarray + its top-left in top-down window coordinates. Called from
+        present() between the readback and the premultiply, so the bubble gets
+        exactly the same premultiply treatment as the character."""
+        img, ox, oy = ov
+        ih, iw = img.shape[:2]
+        if ih <= 0 or iw <= 0:
+            return
+        imgF = img[::-1]                  # flip to bottom-up to match raw
+        r0 = self.h - oy - ih             # raw row of imgF row 0 (overlay bottom)
+        r1 = min(self.h, r0 + ih)
+        r0c = max(0, r0)
+        j0 = r0c - r0                     # skip imgF rows that fall above the window
+        i0 = max(0, -ox)
+        i1 = min(iw, self.w - ox)
+        if r1 <= r0c or i1 <= i0:
+            return
+        src = imgF[j0:j0 + (r1 - r0c), i0:i1].astype(np.float32)
+        dst = raw[r0c:r1, ox + i0:ox + i1].astype(np.float32)
+        sA = src[:, :, 3:4] / 255.0       # straight-alpha "over"
+        dst[:, :, :3] = dst[:, :, :3] * (1.0 - sA) + src[:, :, :3] * sA
+        dst[:, :, 3:4] = src[:, :, 3:4] + dst[:, :, 3:4] * (1.0 - sA)
+        raw[r0c:r1, ox + i0:ox + i1] = np.clip(dst, 0, 255).round().astype(np.uint8)
 
     def close(self):
         gdi32.SelectObject(self.hdc_mem, self.old_bmp)
@@ -589,6 +663,259 @@ MOUTH_KEYS = ("ParamMouthOpenY", "ParamMouthForm")
 ALL_KEYS = sorted(set().union(*EMOTIONS.values()) | set(OVERLAY_TOGGLES))
 
 
+# --------------------------------------------------------------------------
+# Speech bubble — shown at the character's head while an external process sends
+# {"say": "..."} over the control port; hidden again by {"say": null}.
+#
+# Look (game-UI speech box, no tail): a flat wide rounded rectangle with big
+# corner radii, warm beige fill (#f8efde family, subtle vertical light falloff,
+# not dead white), a thin tan outline, the message centred both ways in a
+# regular (non-bold) CJK face, and a faint soft drop shadow underneath so it
+# floats. Never has a pointer tail.
+#
+# Size & face rule (user-picked): the bubble is FIXED at up to BUBBLE_MAX_LINES
+# (3); when the text would need more lines the font shrinks (BUBBLE_FONT_FRAC ->
+# ~0.62x) and only a genuinely extreme message falls back to "…" truncation.
+# It is wider than it is tall and never stretches down onto the face.
+#
+# Placement: the bubble BODY (never the faint shadow) always floats ABOVE the
+# measured hair crown with a BUBBLE_CROWN_GAP air gap. It never has to make
+# room by shrinking or moving the pet: the window is created taller with a
+# permanent transparent BUBBLE_SKY_FRAC "sky" band on top (LayeredWindow.sky),
+# and the pet is drawn at full size into the bottom content rows. The bubble
+# lives entirely in the sky band; if a bubble still exceeds the sky (huge zoom
+# or a pet parked at the screen's top edge) its top simply rides past the
+# window/screen edge and is clipped by _blend_overlay — never over the face.
+# All measurements are proportional to the content band (fs from h - sky) so
+# the bubble scales with the pet (zoom / DPI). It never enters win.last_rgba,
+# so mouse hit-test and the crown detection below stay on the pet's own pixels.
+# --------------------------------------------------------------------------
+BUBBLE_FONT_CANDIDATES = [r"C:\Windows\Fonts\msyh.ttc",    # 常规(非粗)优先
+                          r"C:\Windows\Fonts\Deng.ttf",    # (等线 Regular 备选)
+                          r"C:\Windows\Fonts\msyhbd.ttc",
+                          r"C:\Windows\Fonts\Dengb.ttf",
+                          r"C:\Windows\Fonts\simhei.ttf",
+                          r"C:\Windows\Fonts\simsun.ttc"]
+BUBBLE_MAX_LINES = 3                # hard line cap (keeps the bubble off the face)
+BUBBLE_FONT_FRAC = 0.034            # start font px = round(contentH * frac); too-
+                                    # long text shrinks toward ~0.62x
+BUBBLE_TEXT_W_FRAC = 0.76           # wrap width = W * frac (minus inner padding)
+BUBBLE_CROWN_GAP = 7                # air gap between the body bottom and the crown
+BUBBLE_SKY_FRAC = 0.20              # reserved headroom above the pet = this
+                                    # fraction of the content height. Window is
+                                    # created content + sky tall; the bubble (max
+                                    # ~0.17 contentH at start font + 3 lines) fits
+                                    # the sky, so the pet never shrinks to make
+                                    # room. Added only when the pet is docked at
+                                    # the content band's top: this is the zone the
+                                    # bubble floats in.
+BUBBLE_FILL_TOP = (252, 247, 238)   # 暖米黄渐变·上沿略提亮
+BUBBLE_FILL_BOT = (246, 236, 215)   # 暖米黄渐变·下沿略深 (中心≈#f8efde)
+BUBBLE_OUTLINE = (214, 193, 150)    # 细 浅棕褐 描边
+BUBBLE_TEXT_FILL = (58, 53, 47)     # 文字 近黑深灰
+BUBBLE_SHADOW_ALPHA = 55            # 投影浓度(微弱; 高斯后更淡)
+BUBBLE_SHADOW_DY_FRAC = 0.50        # 投影下移 px = round(fs*frac); 须 > blur 才
+BUBBLE_SHADOW_BLUR_FRAC = 0.34      # 不致晕散到气泡上方成暗边; 高斯半径 px
+
+_font_cache = {}                    # px -> ImageFont
+_bubble_img_cache = {}              # (text, fs, textw, max_lines) -> PIL image
+
+
+def _font_for(px):
+    if px not in _font_cache:
+        f = None
+        for p in BUBBLE_FONT_CANDIDATES:
+            try:
+                f = ImageFont.truetype(p, px)
+                break
+            except Exception:
+                continue
+        if f is None:               # no real CJK font: tiny default is better
+            f = ImageFont.load_default()
+        _font_cache[px] = f
+    return _font_cache[px]
+
+
+def _wrap_text(font, text, max_px):
+    """Greedy per-character wrap; explicit \n forces a break. CJK chars are
+    ~font-size wide, so measuring keeps non-CJK (English/numbers) tight too."""
+    meas = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    lines = []
+    for seg in text.split("\n"):
+        cur = ""
+        for ch in seg:
+            if cur and meas.textlength(cur + ch, font=font) > max_px:
+                lines.append(cur)
+                cur = ch
+            else:
+                cur += ch
+        lines.append(cur)
+    return lines
+
+
+def _grad_body(ww, ih, radius, c_top, c_bot):
+    """Rounded-rect body filled with a soft vertical gradient (top lighter →
+    bottom deeper), straight-alpha RGBA. The fill silhouette shares the SAME
+    outer edge as the outline ring drawn on top (mask is padded by one pixel,
+    so the ring never leaves a hairline gap along the rounded corners)."""
+    mask = Image.new("L", (ww, ih), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((-1, -1, ww, ih),
+                                           radius=radius, fill=255)
+    a = np.asarray(mask)                       # (ih, ww) 0/255 silhouette
+    t = np.linspace(0.0, 1.0, ih)[:, None]     # (ih, 1) row ramp
+    top = np.array(c_top, np.float32)
+    bot = np.array(c_bot, np.float32)
+    rgb = top[None, :] * (1.0 - t) + bot[None, :] * t   # (ih, 3)
+    rgb = rgb[:, None, :].repeat(ww, axis=1)             # (ih, ww, 3)
+    out = np.zeros((ih, ww, 4), np.uint8)
+    out[:, :, :3] = rgb.astype(np.uint8)
+    out[:, :, 3] = a
+    return Image.fromarray(out, "RGBA")
+
+
+def _render_bubble(text, fs, textw_px, max_lines):
+    """Draw the speech bubble: a wide capsule (fully round short ends), warm-beige
+    gradient fill, thin tan outline, the message centred both ways in a regular
+    (not bold) CJK face. Text that would exceed max_lines is first fit by shrinking
+    the font a few steps; only past the minimum size does the last line get "…".
+    Returns a top-down straight-alpha RGBA image (canvas includes the shadow
+    margins). Cached by (text, start size, wrap width, line cap)."""
+    key = (text, fs, textw_px, max_lines)
+    img = _bubble_img_cache.get(key)
+    if img is not None:
+        return img
+    if len(_bubble_img_cache) > 32:     # zoom/DPI churn guard
+        _bubble_img_cache.clear()
+
+    meas = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    # 1) font: start regular at `fs`, shrink until the text fits max_lines
+    min_fs = max(9, round(fs * 0.62))   # below this: truncate, don't shrink more
+    size, font = fs, _font_for(fs)
+    lines = _wrap_text(font, text, textw_px)
+    while len(lines) > max_lines and size > min_fs:
+        size = max(min_fs, round(size * 0.9))
+        font = _font_for(size)
+        lines = _wrap_text(font, text, textw_px)
+    truncated = len(lines) > max_lines
+    lines = lines[:max_lines]
+    if truncated and lines:
+        last = lines[-1]
+        while last and meas.textlength(last + "…", font=font) > textw_px:
+            last = last[:-1]
+        lines[-1] = last + "…"
+
+    line_h = max(size + 2, round(size * 1.30))
+    pad_x = max(14, round(size * 1.40))   # 扁宽: 横向留白大于竖向
+    pad_y = max(9, round(size * 0.55))
+    bw = max(1, round(size * 0.05))       # 纤细描边, 随字号等比
+    sh_dy = max(4, round(size * BUBBLE_SHADOW_DY_FRAC))      # 下移须 ≥ blur,
+    sh_blur = max(4, round(size * BUBBLE_SHADOW_BLUR_FRAC))  # 否则晕到主体上方
+    m_side = max(3, sh_blur // 2)         # 侧向留白: 仅不裁切阴影柔边
+    m_top = 3                             # 阴影在主体下方, 顶部不需留白
+    m_bot = sh_dy + sh_blur + 2           # 下方多留 → 投影落区
+
+    text_w = int(max((meas.textlength(ln, font=font) for ln in lines),
+                     default=1))
+    body_w = text_w + 2 * pad_x
+    content_h = len(lines) * line_h
+    body_h = content_h + 2 * pad_y
+    radius = min(body_h // 2, body_w // 2)   # 胶囊: 短边两端画整圆
+    ww, ih = body_w + 2 * m_side, body_h + m_top + m_bot
+
+    # 2) soft drop shadow: body silhouette dropped sh_dy px, blurred, low alpha
+    shadow = Image.new("RGBA", (ww, ih), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle(
+        (m_side, m_top + sh_dy, m_side + body_w - 1, m_top + sh_dy + body_h - 1),
+        radius=radius, fill=(0, 0, 0, BUBBLE_SHADOW_ALPHA))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(sh_blur))
+
+    # 3) gradient body + thin outline
+    body = _grad_body(body_w, body_h, radius, BUBBLE_FILL_TOP, BUBBLE_FILL_BOT)
+    d = ImageDraw.Draw(body)
+    d.rounded_rectangle((0, 0, body_w - 1, body_h - 1), radius=radius,
+                        outline=BUBBLE_OUTLINE, width=bw)
+
+    out = Image.new("RGBA", (ww, ih), (0, 0, 0, 0))
+    out.alpha_composite(shadow, (0, 0))
+    out.alpha_composite(body, (m_side, m_top))
+
+    # 4) centred text: draw onto an inner layer first, then paste so the real
+    #    INK bbox (not the font's advance box, which has leading/leaning) is
+    #    centred both ways inside the body.
+    txt = Image.new("RGBA", (body_w - 2 * pad_x, content_h), (0, 0, 0, 0))
+    td = ImageDraw.Draw(txt)
+    for i, ln in enumerate(lines):
+        x = (txt.width - td.textlength(ln, font=font)) // 2
+        td.text((x, i * line_h), ln, font=font, fill=BUBBLE_TEXT_FILL)
+    ta = np.asarray(txt)
+    ink = ta[:, :, 3] > 8
+    if ink.any():
+        yr, xr = np.where(ink)
+        dx = m_side + (body_w - (xr.max() - xr.min() + 1)) // 2 - xr.min()
+        dy = m_top + (body_h - (yr.max() - yr.min() + 1)) // 2 - yr.min()
+        out.alpha_composite(txt, (dx, dy))
+    _bubble_img_cache[key] = out
+    return out
+
+
+def _bubble_overlay(win, text):
+    """Build this frame's bubble overlay (straight-alpha RGBA, top-down) plus its
+    window position (ox, oy), or None when nothing should be drawn. text None /
+    blank hides. win.overlay is re-derived by the main loop every frame. The
+    returned image has transparent shadow margins around the body: vertical
+    placement anchors the BODY (never the faint shadow) so it floats ABOVE the
+    hair with an air gap and never covers the face. The pet is never moved or
+    shrunk for the bubble: the window's top sky band is the bubble's reserved
+    home, so oy normally lands inside the sky. If a bubble outgrows the sky it
+    simply pokes above the window top (negative oy, clipped by _blend_overlay).
+    Font size is keyed to the CONTENT height (win.h - win.sky), not the taller
+    window, so the bubble stays proportional to the pet."""
+    if not text:
+        return None
+    al = win.last_rgba
+    content_h = win.h - win.sky
+    if al is None or content_h < 60 or win.w < 40:
+        return None                        # no pet frame to anchor to yet
+    op = al[:, :, 3] > 10
+    rows = np.where(op.any(axis=1))[0]
+    if rows.size == 0:
+        return None
+    r_top, r_bot = int(rows.max()), int(rows.min())
+    char_h = r_top - r_bot + 1
+    band = op[max(0, r_top - max(6, int(char_h * 0.05))):r_top + 1]
+    colv = np.where(band.any(axis=0))[0]
+    target_cx = int(np.median(colv)) if colv.size else win.w // 2
+    if win._bubble_cx is None:            # smooth the head-sway drift
+        win._bubble_cx = float(target_cx)
+    else:
+        win._bubble_cx += (target_cx - win._bubble_cx) * 0.25
+    cx = int(win._bubble_cx)
+
+    # Fixed design: at most BUBBLE_MAX_LINES, font shrinks to fit; the bubble is
+    # a wide rounded block whose BODY bottom floats just above the hair crown with
+    # an air gap. It never covers the face and never forces the pet to shrink:
+    # the crown sits at the bottom edge of the reserved sky band, and the body is
+    # placed BUBBLE_CROWN_GAP above it, so oy lands inside the sky. If the sky is
+    # too small for an extreme bubble it rides up past the top edge (negative oy
+    # — _blend_overlay clips it) without ever touching the face.
+    fs = max(11, min(96, round(content_h * BUBBLE_FONT_FRAC)))
+    pad_x = max(14, round(fs * 1.40))
+    textw_px = max(40, round(win.w * BUBBLE_TEXT_W_FRAC) - 2 * pad_x - 8)
+    img = _render_bubble(text, fs, textw_px, BUBBLE_MAX_LINES)
+    arr = np.asarray(img)
+    ih, iw = arr.shape[:2]
+    body_op = arr[:, :, 3] > 200                 # body is opaque; shadow is faint
+    brow = np.where(body_op.any(axis=1))[0]
+    body_bot = int(brow.max())
+
+    crown_y = win.h - 1 - r_top                  # hair crown (display, y down)
+    oy = crown_y - BUBBLE_CROWN_GAP - body_bot - 1       # float; top may go negative
+    ox = max(2, min(cx - iw // 2, win.w - iw - 2))
+    if ox + iw > win.w:                       # bubble wider than the window
+        ox = max(0, (win.w - iw) // 2)
+    return (arr, ox, oy)
+
+
 class PetControl:
     """Thread-safe state shared between the GLFW thread (renderer) and the
     sounddevice/TCP threads (lipsync energy + external emotion commands)."""
@@ -597,6 +924,8 @@ class PetControl:
         self._lock = threading.Lock()
         self.emotion = emotion
         self.mouth = None                 # None = not talking, 0..1 = forced open
+        self.bubble = None                # None = no speech bubble, str = shown
+                                          # (text stays until {"say": null})
         self.clothes = True               # True = dressed, False = undressed
                                           # (llny Param2 "去外套": 0 = wearing, 1 = removed)
 
@@ -610,6 +939,18 @@ class PetControl:
     def set_mouth(self, level):
         with self._lock:
             self.mouth = None if level is None else clamp(level, 0.0, 1.0)
+
+    def set_bubble(self, text):
+        """Show a speech bubble while text is a non-blank string; None or a
+        blank string hides it. The bubble is independent of emotion/mouth and
+        stays up until it is explicitly hidden (set_bubble(None))."""
+        if text is None:
+            with self._lock:
+                self.bubble = None
+            return
+        t = text if isinstance(text, str) else str(text)
+        with self._lock:
+            self.bubble = t if t.strip() else None
 
     def toggle_clothes(self):
         """Flip the jacket: first call takes it off, next puts it back on.
@@ -1050,8 +1391,12 @@ class _ControlServer(socketserver.ThreadingTCPServer):
 
 
 def make_control_handler(control):
-    """A StreamRequestHandler that reads one JSON per line:
-    {"emotion":"开心"} / {"mouth":0.7} / {"mouth":null} (release the mouth)."""
+    """A StreamRequestHandler that reads one JSON object per line. Each key is an
+    independent channel; a missing key leaves that channel untouched:
+      {"emotion":"开心"}   switch emotion            {"emotion":null} reset to 平和
+      {"say":"你好呀"}      show a speech bubble      {"say":null}     hide it
+      {"mouth":0.7}        force the mouth open      {"mouth":null}   release it
+    Unknown keys are ignored (forward/backward compatible), {} does nothing."""
     class Handler(socketserver.StreamRequestHandler):
         def handle(self):
             for line in self.rfile:
@@ -1062,11 +1407,23 @@ def make_control_handler(control):
                     continue
                 if not isinstance(msg, dict):
                     continue
-                if isinstance(msg.get("emotion"), str):
-                    if control.set_emotion(msg["emotion"]):
-                        print(f"control: emotion -> {msg['emotion']}")
-                    else:
-                        print(f"control: unknown emotion {msg['emotion']!r}")
+                if "emotion" in msg:
+                    if isinstance(msg["emotion"], str):
+                        if control.set_emotion(msg["emotion"]):
+                            print(f"control: emotion -> {msg['emotion']}")
+                        else:
+                            print(f"control: unknown emotion {msg['emotion']!r}")
+                    elif msg["emotion"] is None:
+                        control.set_emotion("平和")
+                        print("control: emotion -> 平和 (default)")
+                if "say" in msg:
+                    if isinstance(msg["say"], str):
+                        control.set_bubble(msg["say"])
+                        print(f"control: say -> {msg['say'][:60]!r}"
+                              + ("…" if len(msg["say"]) > 60 else ""))
+                    elif msg["say"] is None:
+                        control.set_bubble(None)
+                        print("control: say -> hidden")
                 if "mouth" in msg:
                     control.set_mouth(msg["mouth"])
                     print(f"control: mouth -> {msg['mouth']}")
@@ -1078,8 +1435,10 @@ def start_control_server(port, control):
     so the caller can shutdown() it on exit."""
     server = _ControlServer(("127.0.0.1", port), make_control_handler(control))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"control server listening on 127.0.0.1:{port} — one JSON per line: "
-          '{"emotion":"开心"}, {"mouth":0.7}, {"mouth":null}')
+    print(f"control server listening on 127.0.0.1:{port} — one JSON object per "
+          "line, channels are independent and optional: "
+          '{"emotion":"开心"} / {"emotion":null}(平和) / {"say":"..."} / '
+          '{"say":null}(hide) / {"mouth":0.7} / {"mouth":null}')
     return server
 
 
@@ -1092,12 +1451,15 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--width", type=int, default=None,
-                    help="window width in physical pixels (default: W=520 "
-                         "scaled by the monitor DPI, so the pet is a "
-                         "consistent size on high-DPI screens)")
+                    help="pet width in physical pixels (default: W=520 scaled "
+                         "by the monitor DPI, so the pet is a consistent size "
+                         "on high-DPI screens)")
     ap.add_argument("--height", type=int, default=None,
-                    help="window height in physical pixels (default: H=720 "
-                         "scaled by the monitor DPI)")
+                    help="pet height in physical pixels (default: H=720 scaled "
+                         "by the monitor DPI). The window is created this tall "
+                         "PLUS a top reserved sky band (~20% of H, the speech "
+                         "bubble's permanent home); the pet anchors at the "
+                         "bottom of the taller window")
     ap.add_argument("--x", type=int, default=None, help="window left (default top-right)")
     ap.add_argument("--y", type=int, default=None, help="window top (default top-right)")
     ap.add_argument("--scale", type=float, default=1.0,
@@ -1132,8 +1494,11 @@ def main():
                          "(default: first [Loopback] device; list with "
                          "`python -c \"from system_listen import list_loopback_devices; list_loopback_devices()\"`)")
     ap.add_argument("--control-port", type=int, default=None,
-                    help="listen on 127.0.0.1:PORT for JSON control lines "
-                         '(e.g. {"emotion":"开心"}, {"mouth":0.7}, {"mouth":null})')
+                    help="listen on 127.0.0.1:PORT for JSON control objects — "
+                         "independent optional channels: "
+                         '{"emotion":"开心"}|{"emotion":null}(平和), '
+                         '{"say":"..."}|{"say":null}(hide speech bubble), '
+                         '{"mouth":0.7}|{"mouth":null}')
     ap.add_argument("--click-through", action="store_true",
                     help="let mouse clicks pass through the window (ESC then "
                          "may not work; Alt+F4 or task manager to quit)")
@@ -1157,8 +1522,13 @@ def main():
             args.width = dw
         if args.height is None:
             args.height = dh
-    win = LayeredWindow(args.width, args.height, args.x, args.y,
-                        click_through=args.click_through)
+    # Reserved "sky" band on top of the pet: the window is created content + sky
+    # tall, the pet is drawn full-size into the bottom content rows, and the sky
+    # is the speech bubble's permanent home — the pet never shrinks/moves for a
+    # bubble. --width/--height stay the CONTENT (pet) size.
+    sky = max(0, round(args.height * BUBBLE_SKY_FRAC))
+    win = LayeredWindow(args.width, args.height + sky, args.x, args.y,
+                        click_through=args.click_through, sky=sky)
     control_server = None
     try:
         live2d.init()
@@ -1171,10 +1541,12 @@ def main():
         # motion, physics and expression layers.
         model.SetAutoBlinkEnable(False)
         model.SetAutoBreathEnable(False)
-        model.Resize(args.width, args.height)
+        model.Resize(args.width, args.height)    # content size — the pet band
         scale = args.scale                       # absolute factor (scale ~= fit window)
         model.SetScale(scale)
         win.set_scale(scale)                     # click zones track the scaled body
+        win.begin_frame()                        # sky clear + content viewport, so
+                                                 # the first Draw fills the pet band
 
         present_lookup = param_lookup(model, ["Param14", "Param2"])
         if "Param14" in present_lookup:          # llny: remove watermark
@@ -1288,27 +1660,33 @@ def main():
         prev_keys = {}
         clothes_level = 0.0               # Param2 level: 0 = dressed, 1 = coat removed
 
-        # Zoom state: the pet's on-screen size is (window height) x (the fill
-        # factor scale, fixed at args.scale). Zooming resizes the WINDOW (and
-        # re-fits the model) so the pet grows/shrinks whole with no clipping.
-        # Mouse-wheel deltas and the +/- / 0 keys funnel into apply_zoom().
-        start_w, start_h = args.width, args.height
+        # Zoom state: the pet's on-screen size is (content height) x (the fill
+        # factor scale, fixed at args.scale). Zooming resizes the WINDOW — content
+        # band AND its sky band, both proportionally — so the pet and its bubble
+        # home grow/shrink whole with no clipping. Mouse-wheel deltas and the
+        # +/- / 0 keys funnel into apply_zoom().
+        start_w, start_h = args.width, args.height   # content-band size at startup
         zoom = 1.0                        # window-size multiplier over startup
 
         def apply_zoom():
             """Resize window + model so the pet is 'zoom' x the startup size,
-            clamped to the workarea and a 120px floor, centre fixed."""
+            clamped to the workarea and a 120px floor, centre fixed. Content and
+            sky scale together, so the bubble band stays proportional to the pet."""
             nonlocal zoom
             _, _, mw, mh = glfw.get_monitor_workarea(glfw.get_primary_monitor())
             mw = max(120, mw - 40)
             mh = max(120, mh - 40)
-            zoom = max(0.1, min(zoom, mw / start_w, mh / start_h))
+            # the FULL window (content + sky) must fit the workarea height
+            zoom = max(0.1, min(zoom, mw / start_w,
+                                mh / (start_h * (1.0 + BUBBLE_SKY_FRAC))))
             nw = max(120, round(start_w * zoom))
-            nh = max(120, round(start_h * zoom))
-            model.Resize(nw, nh)
-            model.SetScale(scale)         # keep the same fill factor
-            win.resize(nw, nh)
-            print(f"zoom = {zoom:.2f}  ({nw}x{nh})")
+            ch = max(120, round(start_h * zoom))        # content band
+            nsky = round(ch * BUBBLE_SKY_FRAC)           # sky scales with the pet
+            model.Resize(nw, ch)
+            model.SetScale(scale)
+            win.sky = nsky
+            win.resize(nw, ch + nsky)
+            print(f"zoom = {zoom:.2f}  ({nw}x{ch + nsky})")
 
         while True:
             if glfw.window_should_close(win.window) or \
@@ -1359,6 +1737,18 @@ def main():
             rate = (TUG_ATTACK_RATE if tt != (0.0, 0.0) else TUG_RELEASE_RATE)
             win.tug = (t[0] + (tt[0] - t[0]) * rate,
                        t[1] + (tt[1] - t[1]) * rate)
+
+            # speech bubble ({"say": "..."}): composite over the next frame; the
+            # overlay anchors on the previous pet-only frame, so it must be set
+            # right before the render that will be presented. The pet never
+            # shrinks or moves for a bubble — the reserved sky band above it is
+            # the bubble's home.
+            win.overlay = _bubble_overlay(win, control.bubble)
+
+            # reserved-sky per-frame GL setup: clear the sky, pin the content
+            # viewport, then let the frame function draw the pet full-size into
+            # the bottom content rows.
+            win.begin_frame()
 
             if express:
                 express_frame(win, model, f, control, idle_motion, estate,
