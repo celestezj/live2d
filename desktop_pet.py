@@ -667,8 +667,9 @@ ALL_KEYS = sorted(set().union(*EMOTIONS.values()) | set(OVERLAY_TOGGLES))
 # Speech bubble — shown at the character's head while an external process sends
 # {"say": "..."} over the control port; hidden again by {"say": null}.
 #
-# Look (game-UI speech box, no tail): a flat wide rounded rectangle with big
-# corner radii, warm beige fill (#f8efde family, subtle vertical light falloff,
+# Look (game-UI speech box, no tail): a flat wide rounded rectangle with small,
+# UNIFORM corner radii (~10% of the body height — never a pill/capsule, no
+# semicircle ends), warm beige fill (#f8efde family, subtle vertical light falloff,
 # not dead white), a thin tan outline, the message centred both ways in a
 # regular (non-bold) CJK face, and a faint soft drop shadow underneath so it
 # floats. Never has a pointer tail.
@@ -701,6 +702,10 @@ BUBBLE_FONT_FRAC = 0.034            # start font px = round(contentH * frac); to
                                     # long text shrinks toward ~0.62x
 BUBBLE_TEXT_W_FRAC = 0.76           # wrap width = W * frac (minus inner padding)
 BUBBLE_CROWN_GAP = 7                # air gap between the body bottom and the crown
+BUBBLE_CORNER_FRAC = 0.10           # corner radius = ~10% of the body height —
+                                    # small, uniform on all four corners (a flat
+                                    # rounded rectangle, NOT a capsule/pill whose
+                                    # short ends are full semicircles)
 BUBBLE_SKY_FRAC = 0.20              # reserved headroom above the pet = this
                                     # fraction of the content height. Window is
                                     # created content + sky tall; the bubble (max
@@ -756,10 +761,11 @@ def _wrap_text(font, text, max_px):
 def _grad_body(ww, ih, radius, c_top, c_bot):
     """Rounded-rect body filled with a soft vertical gradient (top lighter →
     bottom deeper), straight-alpha RGBA. The fill silhouette shares the SAME
-    outer edge as the outline ring drawn on top (mask is padded by one pixel,
-    so the ring never leaves a hairline gap along the rounded corners)."""
+    coordinates as the outline ring drawn on top (rounded_rectangle(0,0,ww-1,ih-1)
+    with the same radius), so the corner arcs are NOT clipped by the image edge
+    and the ring leaves no hairline gap along the rounded corners."""
     mask = Image.new("L", (ww, ih), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((-1, -1, ww, ih),
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, ww - 1, ih - 1),
                                            radius=radius, fill=255)
     a = np.asarray(mask)                       # (ih, ww) 0/255 silhouette
     t = np.linspace(0.0, 1.0, ih)[:, None]     # (ih, 1) row ramp
@@ -774,12 +780,13 @@ def _grad_body(ww, ih, radius, c_top, c_bot):
 
 
 def _render_bubble(text, fs, textw_px, max_lines):
-    """Draw the speech bubble: a wide capsule (fully round short ends), warm-beige
-    gradient fill, thin tan outline, the message centred both ways in a regular
-    (not bold) CJK face. Text that would exceed max_lines is first fit by shrinking
-    the font a few steps; only past the minimum size does the last line get "…".
-    Returns a top-down straight-alpha RGBA image (canvas includes the shadow
-    margins). Cached by (text, start size, wrap width, line cap)."""
+    """Draw the speech bubble: a flat rounded rectangle with small UNIFORM corner
+    radii (BUBBLE_CORNER_FRAC of the body height — not a capsule, no semicircle
+    ends), warm-beige gradient fill, thin tan outline, the message centred both
+    ways in a regular (not bold) CJK face. Text that would exceed max_lines is
+    first fit by shrinking the font a few steps; only past the minimum size does
+    the last line get "…". Returns a top-down straight-alpha RGBA image (canvas
+    includes the shadow margins). Cached by (text, start size, wrap width, cap)."""
     key = (text, fs, textw_px, max_lines)
     img = _bubble_img_cache.get(key)
     if img is not None:
@@ -819,7 +826,7 @@ def _render_bubble(text, fs, textw_px, max_lines):
     body_w = text_w + 2 * pad_x
     content_h = len(lines) * line_h
     body_h = content_h + 2 * pad_y
-    radius = min(body_h // 2, body_w // 2)   # 胶囊: 短边两端画整圆
+    radius = max(1, round(body_h * BUBBLE_CORNER_FRAC))  # 统一小圆角: 高度 ~10%
     ww, ih = body_w + 2 * m_side, body_h + m_top + m_bot
 
     # 2) soft drop shadow: body silhouette dropped sh_dy px, blurred, low alpha
