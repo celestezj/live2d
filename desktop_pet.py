@@ -104,6 +104,11 @@ AC_SRC_OVER = 0x00
 AC_SRC_ALPHA = 0x01
 BI_RGB = 0
 
+HWND_TOPMOST = -1
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
+
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 
@@ -112,6 +117,10 @@ user32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
 user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
 user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
 user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+user32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                                ctypes.c_int, ctypes.c_int,
+                                ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+user32.SetWindowPos.restype = ctypes.c_int
 user32.GetDC.argtypes = [ctypes.c_void_p]
 user32.GetDC.restype = ctypes.c_void_p
 user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -246,6 +255,15 @@ class LayeredWindow:
 
         glfw.show_window(self.window)
         glfw.poll_events()
+
+    def pin_topmost(self):
+        """Re-pin the pet at the very TOP of the topmost z-band. The taskbar
+        (Shell_TrayWnd) is itself a WS_EX_TOPMOST window; clicking it makes
+        Explorer raise the taskbar above other topmost windows, which would
+        otherwise cover the pet. Called once per frame from the main loop, so
+        even right after a taskbar click the pet returns on top within a frame."""
+        user32.SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
 
     # ---- drag to move the window ----------------------------------------
 
@@ -1700,6 +1718,9 @@ def main():
                glfw.get_key(win.window, glfw.KEY_ESCAPE) == glfw.PRESS:
                 break
 
+            # clicking the taskbar raises it above other topmost windows and would
+            # cover the pet; re-pin once a frame keeps the pet on top of it too
+            win.pin_topmost()
             win._fire_pending_click()     # confirm lone right-clicks (lock/unlock)
 
             # live resize: mouse wheel over the pet, or edge-triggered + / - / 0.
@@ -1770,6 +1791,12 @@ def main():
                              tug=win.tug, valid=model_ids,
                              tug_zone=win.tug_zone,
                              demo_mouth=args.demo_talk)
+
+            # The frame function just polled events, so a taskbar click (which
+            # raises the taskbar above other topmost windows) has been processed
+            # microseconds ago; re-pin now, right where it happened, so the pet
+            # goes back on top before DWM can paint the covered state — no flash.
+            win.pin_topmost()
             f += 1
     finally:
         if control_server is not None:
