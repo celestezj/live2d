@@ -1,2 +1,4 @@
+# 启动live2d server（如果是要配合[语音对话系统](https://github.com/celestezj/voice1)使用，执行该命令即可，下面的test client不需要启动）：
 python desktop_pet.py --emotion 开心 --scale 1 --listen --control-port 5000 --random-actions
+# 启动test client：
 python mock_control.py --port 5000
