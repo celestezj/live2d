@@ -4,10 +4,10 @@
 透明 Live2D 桌宠（llny 模型，live2d-py v3），Windows 分层窗口（`WS_EX_LAYERED` + `UpdateLayeredWindow`）。AI 语音驱动：16 情绪 + WAV 对口型 + 监听系统音频 + TCP 外部控制（切情绪 / 头顶说话框 `{"say":..}` / 嘴）+ 鼠标交互（拖动/锁定/拽头转身/拽身体转身/害羞/穿脱外套）。
 
 ## 环境（必须遵守）
-- 运行/验证一律用 `/d/anaconda/envs/voice-asr/python.exe`（装 glfw、live2d 0.7.0.4、sounddevice、pyaudiowpatch）。别用系统 python。
+- 运行/验证优先用本地 `voice-asr` 虚拟环境的 python（来自 <https://github.com/celestezj/voice1>，已装 glfw、live2d 0.7.0.4、sounddevice、pyaudiowpatch）或 本地 `voice-tts` 虚拟环境的 python（来自 <https://github.com/celestezj/voice0>）；别用系统 python。项目本身**无自建环境文件**（无 requirements.txt / venv），若 voice-asr 不在，落回按 README §3 建一个 Python 3.10+ 环境并 pip 装齐上述依赖。
 - 仓库就是本目录（git master，无 remote，直接提交）。
 - 改 README 时路径一律用 `/path/to/...` 占位，**绝不用 `E:` 绝对路径**。
-- 项目记忆在 `C:\Users\dymic\.claude\projects\E--temp-live2d\memory\`（跨会话；MEMORY.md 是索引）。
+- 项目记忆在 `~/.claude/projects/<repo_dir>/memory/`（跨会话；MEMORY.md 是索引）。
 
 ## 快速跑起来
 ```bash
