@@ -1,0 +1,2 @@
+python desktop_pet.py --emotion 开心 --scale 1 --listen --control-port 5000 --random-actions
+python mock_control.py --port 5000
